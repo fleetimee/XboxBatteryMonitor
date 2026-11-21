@@ -355,9 +355,12 @@ namespace XboxBatteryMonitor
             private readonly NotifyIcon _trayIcon;
             private readonly System.Windows.Forms.Timer _pollTimer;
             private readonly System.Windows.Forms.Timer _idleCheckTimer;
+            private readonly System.Windows.Forms.Timer _hideTimer;
             private readonly bool[] _notifiedLow = new bool[4];
             private readonly int?[] _lastPercent = new int?[4];
             private readonly bool[] _isChargingInferred = new bool[4];
+            private bool _wasConnected = false;
+            private int _connectedTicks = 0;
             private IntPtr _currentHIcon = IntPtr.Zero;
             private DetailsForm _detailsForm;
 
@@ -377,11 +380,38 @@ namespace XboxBatteryMonitor
                 };
                 _trayIcon.DoubleClick += (s, e) => ShowDetails();
 
+                _hideTimer = new System.Windows.Forms.Timer
+                {
+                    Interval = 4500
+                };
+                _hideTimer.Tick += (s, e) =>
+                {
+                    _hideTimer.Stop();
+                    if (!_wasConnected)
+                    {
+                        _trayIcon.Visible = false;
+                    }
+                };
+
+                // Check connection every 5s (fast disconnect detection); full battery check every 60s (12 ticks)
                 _pollTimer = new System.Windows.Forms.Timer
                 {
-                    Interval = POLL_INTERVAL_MS
+                    Interval = 5000
                 };
-                _pollTimer.Tick += (s, e) => UpdateStatus(checkAlerts: true);
+                _pollTimer.Tick += (s, e) =>
+                {
+                    if (!IsAnyControllerConnected())
+                    {
+                        UpdateStatus(checkAlerts: true);
+                        return;
+                    }
+                    _connectedTicks++;
+                    if (_connectedTicks >= 12)
+                    {
+                        _connectedTicks = 0;
+                        UpdateStatus(checkAlerts: true);
+                    }
+                };
 
                 // Lightweight 5s check when disconnected (1 XInputGetState call = 0% CPU)
                 _idleCheckTimer = new System.Windows.Forms.Timer
@@ -393,6 +423,7 @@ namespace XboxBatteryMonitor
                     if (IsAnyControllerConnected())
                     {
                         _idleCheckTimer.Stop();
+                        _connectedTicks = 0;
                         UpdateStatus(checkAlerts: true);
                     }
                 };
@@ -420,8 +451,21 @@ namespace XboxBatteryMonitor
                     }
 
                     _pollTimer.Stop();
+                    _connectedTicks = 0;
                     if (!_idleCheckTimer.Enabled) _idleCheckTimer.Start();
-                    _trayIcon.Visible = false;
+
+                    if (_wasConnected)
+                    {
+                        _wasConnected = false;
+                        SetTrayTooltip("Xbox Controller: Disconnected");
+                        _trayIcon.ShowBalloonTip(4000, "Xbox Controller", "Controller disconnected.", ToolTipIcon.Info);
+                        _hideTimer.Stop();
+                        _hideTimer.Start();
+                    }
+                    else
+                    {
+                        _trayIcon.Visible = false;
+                    }
 
                     if (_detailsForm != null && !_detailsForm.IsDisposed && _detailsForm.Visible)
                     {
@@ -430,6 +474,8 @@ namespace XboxBatteryMonitor
                     return;
                 }
 
+                _hideTimer.Stop();
+                _wasConnected = true;
                 _idleCheckTimer.Stop();
                 if (!_pollTimer.Enabled)
                 {
@@ -687,6 +733,7 @@ namespace XboxBatteryMonitor
             {
                 _pollTimer.Stop();
                 _idleCheckTimer.Stop();
+                _hideTimer.Stop();
                 _trayIcon.Visible = false;
                 if (_currentHIcon != IntPtr.Zero)
                 {
