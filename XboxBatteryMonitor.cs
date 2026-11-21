@@ -85,6 +85,7 @@ namespace XboxBatteryMonitor
             public int? ExactPercent;
             public byte XInputLevel;
             public bool IsWired;
+            public bool IsChargingInferred;
         }
 
         [DllImport("xinput1_4.dll")]
@@ -369,6 +370,8 @@ namespace XboxBatteryMonitor
             private readonly NotifyIcon _trayIcon;
             private readonly System.Windows.Forms.Timer _pollTimer;
             private readonly bool[] _notifiedLow = new bool[4];
+            private readonly int?[] _lastPercent = new int?[4];
+            private readonly bool[] _isChargingInferred = new bool[4];
             private int _disconnectedChecks = 0;
             private IntPtr _currentHIcon = IntPtr.Zero;
             private DetailsForm _detailsForm;
@@ -410,7 +413,12 @@ namespace XboxBatteryMonitor
                 if (controllers.Count == 0)
                 {
                     _disconnectedChecks++;
-                    for (int i = 0; i < 4; i++) _notifiedLow[i] = false;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        _notifiedLow[i] = false;
+                        _lastPercent[i] = null;
+                        _isChargingInferred[i] = false;
+                    }
 
                     SetTrayIcon(null, false);
                     SetTrayTooltip("Xbox Controller: Disconnected");
@@ -428,6 +436,28 @@ namespace XboxBatteryMonitor
                 }
 
                 _disconnectedChecks = 0;
+                foreach (var c in controllers)
+                {
+                    int idx = c.Slot - 1;
+                    if (!c.IsWired && c.ExactPercent.HasValue)
+                    {
+                        if (_lastPercent[idx].HasValue)
+                        {
+                            if (c.ExactPercent.Value > _lastPercent[idx].Value)
+                                _isChargingInferred[idx] = true;
+                            else if (c.ExactPercent.Value < _lastPercent[idx].Value)
+                                _isChargingInferred[idx] = false;
+                        }
+                        _lastPercent[idx] = c.ExactPercent.Value;
+                        c.IsChargingInferred = _isChargingInferred[idx];
+                    }
+                    else
+                    {
+                        _lastPercent[idx] = null;
+                        _isChargingInferred[idx] = false;
+                    }
+                }
+
                 ControllerSnapshot primary = controllers[0];
 
                 SetTrayIcon(primary.ExactPercent, primary.IsWired, primary.XInputLevel);
@@ -516,7 +546,13 @@ namespace XboxBatteryMonitor
                         () => ShowTestNotification());
                 }
 
-                _detailsForm.UpdateData(GetConnectedControllers());
+                var list = GetConnectedControllers();
+                for (int i = 0; i < list.Count; i++)
+                {
+                    int idx = list[i].Slot - 1;
+                    list[i].IsChargingInferred = _isChargingInferred[idx];
+                }
+                _detailsForm.UpdateData(list);
                 if (!_detailsForm.Visible)
                 {
                     _detailsForm.Show();
@@ -951,11 +987,11 @@ namespace XboxBatteryMonitor
 
                 if (c.IsWired)
                 {
-                    _lblBatteryValue.Text = "Charging / USB Powered";
+                    _lblBatteryValue.Text = "USB Connected (Wired / Charging)";
                     _lblBatteryValue.ForeColor = Color.FromArgb(125, 211, 252);
                     _progressBar.FillColor = Color.FromArgb(125, 211, 252);
                     _progressBar.Value = 100;
-                    _lblBatterySub.Text = string.Format("Status: Plugged In (USB)  •  {0}", c.BatteryTypeLabel);
+                    _lblBatterySub.Text = string.Format("Status: Plugged into PC  •  {0}", c.BatteryTypeLabel);
                 }
                 else if (c.ExactPercent.HasValue)
                 {
@@ -963,7 +999,9 @@ namespace XboxBatteryMonitor
                     Color cColor = pct <= LOW_THRESHOLD_PERCENT
                         ? Color.FromArgb(248, 113, 113)
                         : pct <= 40 ? Color.FromArgb(252, 211, 77) : Color.FromArgb(134, 239, 172);
-                    _lblBatteryValue.Text = string.Format("Battery: {0}%  (Not Charging)", pct);
+                    _lblBatteryValue.Text = c.IsChargingInferred
+                        ? string.Format("Battery: {0}%  (Charging ↑)", pct)
+                        : string.Format("Battery: {0}%", pct);
                     _lblBatteryValue.ForeColor = cColor;
                     _progressBar.FillColor = cColor;
                     _progressBar.Value = pct;
@@ -976,7 +1014,7 @@ namespace XboxBatteryMonitor
                                : c.XInputLevel == BATTERY_LEVEL_LOW ? 15 : 5;
                     Color cColor = c.XInputLevel <= BATTERY_LEVEL_LOW
                         ? Color.FromArgb(248, 113, 113) : Color.FromArgb(134, 239, 172);
-                    _lblBatteryValue.Text = string.Format("Battery: {0}  (Not Charging)", LevelText(c.XInputLevel));
+                    _lblBatteryValue.Text = string.Format("Battery: {0}", LevelText(c.XInputLevel));
                     _lblBatteryValue.ForeColor = cColor;
                     _progressBar.FillColor = cColor;
                     _progressBar.Value = approx;
