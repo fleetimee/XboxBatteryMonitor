@@ -135,8 +135,8 @@ namespace XboxBatteryMonitor
 
                 using (NotifyIcon trayIcon = new NotifyIcon())
                 {
-                    trayIcon.Icon = SystemIcons.Warning;
-                    trayIcon.Visible = true;
+                    trayIcon.Icon = SystemIcons.Information;
+                    trayIcon.Visible = false;
                     trayIcon.Text = "Xbox Controller Battery Monitor";
 
                     if (testMode)
@@ -146,8 +146,6 @@ namespace XboxBatteryMonitor
                             ? string.Format("Controller connected! Current Bluetooth battery: {0}%", blePct.Value)
                             : "Controller connected! Monitoring battery level.";
                         ShowNotification(trayIcon, "Xbox Battery Monitor Ready", info, ToolTipIcon.Info);
-                        Thread.Sleep(5000);
-                        trayIcon.Visible = false;
                         return;
                     }
 
@@ -244,11 +242,14 @@ namespace XboxBatteryMonitor
 
         private static void ShowNotification(NotifyIcon trayIcon, string title, string message, ToolTipIcon icon)
         {
+            trayIcon.Visible = true;
             trayIcon.BalloonTipTitle = title;
             trayIcon.BalloonTipText = message;
             trayIcon.BalloonTipIcon = icon;
             trayIcon.ShowBalloonTip(8000);
             Application.DoEvents();
+            Thread.Sleep(8500);
+            trayIcon.Visible = false;
         }
 
         private static int? GetBluetoothXboxBatteryPercent()
