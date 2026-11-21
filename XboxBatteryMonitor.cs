@@ -860,10 +860,21 @@ namespace XboxBatteryMonitor
                     Size = new Size(320, 62)
                 };
 
+                Label lblIcon = new Label
+                {
+                    Text = "\uE7FC", // Segoe Fluent Icons: Game / Xbox Controller
+                    Location = new Point(12, 11),
+                    Size = new Size(40, 40),
+                    Font = new Font("Segoe Fluent Icons", 20f, FontStyle.Regular),
+                    ForeColor = Color.FromArgb(125, 211, 252),
+                    BackColor = Color.FromArgb(52, 52, 58),
+                    TextAlign = ContentAlignment.MiddleCenter
+                };
+
                 _lblModel = new Label
                 {
-                    Location = new Point(14, 10),
-                    Size = new Size(292, 24),
+                    Location = new Point(62, 10),
+                    Size = new Size(246, 24),
                     Font = new Font("Segoe UI Variable Display", 11f, FontStyle.Bold),
                     ForeColor = Color.White,
                     BackColor = Color.Transparent
@@ -871,12 +882,13 @@ namespace XboxBatteryMonitor
 
                 _lblConnection = new Label
                 {
-                    Location = new Point(14, 34),
-                    Size = new Size(292, 18),
+                    Location = new Point(62, 34),
+                    Size = new Size(246, 18),
                     Font = new Font("Segoe UI Variable Text", 8.75f),
                     ForeColor = Color.FromArgb(170, 170, 178),
                     BackColor = Color.Transparent
                 };
+                headerCard.Controls.Add(lblIcon);
                 headerCard.Controls.Add(_lblModel);
                 headerCard.Controls.Add(_lblConnection);
 
