@@ -27,13 +27,23 @@ namespace XboxBatteryMonitor.Tests
                 AssertTrue(maxDelta > 0, "Expected positive scroll delta for short.MaxValue");
             });
 
-            Run("MoveCursor handles short.MinValue (-32768) and deadzone", () =>
+            Run("MoveCursor handles short.MinValue (-32768), deadzone, and sub-pixel accumulation", () =>
             {
-                Point dead = Program.DesktopController.ComputeStickCursorDelta(1000, -1000);
+                double ax = 0, ay = 0;
+                Point dead = Program.DesktopController.ComputeStickCursorDelta(1000, -1000, 1.0 / 60.0, ref ax, ref ay);
                 AssertEqual(Point.Empty, dead, "Deadzone should return Point.Empty");
 
-                Point minPt = Program.DesktopController.ComputeStickCursorDelta(short.MinValue, short.MinValue);
+                Point minPt = Program.DesktopController.ComputeStickCursorDelta(short.MinValue, short.MinValue, 1.0 / 60.0, ref ax, ref ay);
                 AssertTrue(minPt.X < 0 && minPt.Y > 0, "Expected negative X and positive Y (screen inverted)");
+
+                // Sub-pixel accumulation: small tilt should eventually produce a 1px step instead of staying 0 forever
+                ax = 0; ay = 0;
+                int movedX = 0;
+                for (int i = 0; i < 20; i++)
+                {
+                    movedX += Program.DesktopController.ComputeStickCursorDelta(8500, 0, 1.0 / 120.0, ref ax, ref ay).X;
+                }
+                AssertTrue(movedX > 0, "Sub-pixel accumulation should move cursor smoothly on gentle tilt");
             });
 
             Run("Battery alert triggers at <= 20%, respects hysteresis, resets at >= 25%", () =>

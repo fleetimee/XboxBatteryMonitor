@@ -506,6 +506,8 @@ namespace XboxBatteryMonitor
             private ushort _prevButtons = 0;
             private double _scrollAccumY = 0;
             private double _scrollAccumX = 0;
+            private double _cursorAccumX = 0;
+            private double _cursorAccumY = 0;
 
             public void Reset()
             {
@@ -519,9 +521,11 @@ namespace XboxBatteryMonitor
                 _prevButtons = 0;
                 _scrollAccumY = 0;
                 _scrollAccumX = 0;
+                _cursorAccumX = 0;
+                _cursorAccumY = 0;
             }
 
-            public void Tick()
+            public void Tick(double dtSeconds = 1.0 / 60.0)
             {
                 XINPUT_STATE state = new XINPUT_STATE();
                 if (XInputGetState(0, ref state) != ERROR_SUCCESS)
@@ -532,11 +536,11 @@ namespace XboxBatteryMonitor
 
                 var gp = state.Gamepad;
 
-                // 1. Left Stick -> Mouse Cursor (Steam-style radial deadzone + quadratic curve)
-                MoveCursorFromStick(gp.sThumbLX, gp.sThumbLY);
+                // 1. Left Stick -> Mouse Cursor (sub-pixel accumulation + delta-time)
+                MoveCursorFromStick(gp.sThumbLX, gp.sThumbLY, dtSeconds);
 
                 // 2. Right Stick -> Mouse Scroll Wheel
-                ScrollFromStick(gp.sThumbRX, gp.sThumbRY);
+                ScrollFromStick(gp.sThumbRX, gp.sThumbRY, dtSeconds);
 
                 // 3. A or RT -> Left Mouse Click (holdable)
                 bool leftDown = ((gp.wButtons & BTN_A) != 0) || (gp.bRightTrigger > TRIGGER_THRESHOLD);
@@ -596,25 +600,38 @@ namespace XboxBatteryMonitor
                 if (now != prev) SendKey(vk, !now);
             }
 
-            internal static Point ComputeStickCursorDelta(short rawX, short rawY)
+            internal static Point ComputeStickCursorDelta(short rawX, short rawY, double dtSeconds, ref double accumX, ref double accumY)
             {
                 double mag = Math.Sqrt((double)rawX * rawX + (double)rawY * rawY);
-                if (mag <= STICK_DEADZONE) return Point.Empty;
+                if (mag <= STICK_DEADZONE)
+                {
+                    accumX = 0;
+                    accumY = 0;
+                    return Point.Empty;
+                }
 
                 double normMag = Math.Min(1.0, (mag - STICK_DEADZONE) / (32767.0 - STICK_DEADZONE));
-                double speed = normMag * normMag * 18.0; // smooth quadratic curve
-                int dx = (int)Math.Round((rawX / mag) * speed);
-                int dy = (int)Math.Round((-rawY / mag) * speed); // invert Y for screen coords
+                // Blended linear+quadratic curve (px/sec): fine precision near deadzone, fast at full tilt
+                double pxPerSec = (0.20 * normMag + 0.80 * normMag * normMag) * 1200.0;
+                double step = pxPerSec * Math.Min(dtSeconds, 0.05);
+
+                accumX += (rawX / mag) * step;
+                accumY += (-rawY / mag) * step; // invert Y for screen coords
+
+                int dx = (int)Math.Truncate(accumX);
+                int dy = (int)Math.Truncate(accumY);
+                accumX -= dx;
+                accumY -= dy;
                 return new Point(dx, dy);
             }
 
-            internal static int ComputeScrollDelta(short rawAxis, ref double accum)
+            internal static int ComputeScrollDelta(short rawAxis, ref double accum, double dtSeconds = 1.0 / 60.0)
             {
                 int absAxis = Math.Abs((int)rawAxis);
                 if (absAxis <= STICK_DEADZONE) return 0;
 
                 double norm = Math.Min(1.0, (absAxis - STICK_DEADZONE) / (32767.0 - STICK_DEADZONE));
-                accum += Math.Sign((int)rawAxis) * norm * 36.0;
+                accum += Math.Sign((int)rawAxis) * norm * 2100.0 * Math.Min(dtSeconds, 0.05);
                 int delta = (int)accum;
                 if (Math.Abs(delta) >= 20)
                 {
@@ -624,9 +641,9 @@ namespace XboxBatteryMonitor
                 return 0;
             }
 
-            private static void MoveCursorFromStick(short rawX, short rawY)
+            private void MoveCursorFromStick(short rawX, short rawY, double dtSeconds)
             {
-                Point delta = ComputeStickCursorDelta(rawX, rawY);
+                Point delta = ComputeStickCursorDelta(rawX, rawY, dtSeconds, ref _cursorAccumX, ref _cursorAccumY);
                 if (delta.X == 0 && delta.Y == 0) return;
 
                 INPUT[] inp = new INPUT[1];
@@ -635,9 +652,9 @@ namespace XboxBatteryMonitor
                 SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
             }
 
-            private void ScrollFromStick(short rawX, short rawY)
+            private void ScrollFromStick(short rawX, short rawY, double dtSeconds)
             {
-                int deltaY = ComputeScrollDelta(rawY, ref _scrollAccumY);
+                int deltaY = ComputeScrollDelta(rawY, ref _scrollAccumY, dtSeconds);
                 if (deltaY != 0)
                 {
                     INPUT[] inp = new INPUT[1];
@@ -646,7 +663,7 @@ namespace XboxBatteryMonitor
                     SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
                 }
 
-                int deltaX = ComputeScrollDelta(rawX, ref _scrollAccumX);
+                int deltaX = ComputeScrollDelta(rawX, ref _scrollAccumX, dtSeconds);
                 if (deltaX != 0)
                 {
                     INPUT[] inp = new INPUT[1];
@@ -727,12 +744,16 @@ namespace XboxBatteryMonitor
 
                 _desktopTimer = new System.Windows.Forms.Timer
                 {
-                    Interval = 16 // ~60 Hz mouse/input polling only when Desktop Control is enabled
+                    Interval = 8 // ~120 Hz + Stopwatch delta-time for smooth cursor movement
                 };
+                Stopwatch desktopSw = Stopwatch.StartNew();
                 _desktopTimer.Tick += (s, e) =>
                 {
-                    // Re-check Steam or fullscreen/borderless game every ~0.5s (30 ticks)
-                    if (_desktopSteamCheckTicks++ >= 30)
+                    double dt = desktopSw.Elapsed.TotalSeconds;
+                    desktopSw.Restart();
+
+                    // Re-check Steam or fullscreen/borderless game every ~0.5s
+                    if (_desktopSteamCheckTicks++ >= 60)
                     {
                         _desktopSteamCheckTicks = 0;
                         bool shouldPause = IsSteamRunning() || IsFullscreenOrBorderlessAppFocused();
@@ -744,7 +765,7 @@ namespace XboxBatteryMonitor
                     }
                     if (!_steamPausedDesktop)
                     {
-                        _desktopController.Tick();
+                        _desktopController.Tick(dt);
                     }
                 };
 
