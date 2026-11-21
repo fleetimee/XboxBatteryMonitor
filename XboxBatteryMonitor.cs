@@ -500,20 +500,13 @@ namespace XboxBatteryMonitor
                     _debounceTimer.Start();
                 });
 
-                // Run initial check once the WinForms message loop is active
-                var initTimer = new System.Windows.Forms.Timer { Interval = 100 };
-                initTimer.Tick += (s, e) =>
+                UpdateStatus(checkAlerts: !testMode);
+
+                if (testMode)
                 {
-                    initTimer.Stop();
-                    initTimer.Dispose();
-                    UpdateStatus(checkAlerts: !testMode);
-                    if (testMode)
-                    {
-                        _trayIcon.Visible = true;
-                        ShowTestNotification();
-                    }
-                };
-                initTimer.Start();
+                    _trayIcon.Visible = true;
+                    ShowTestNotification();
+                }
             }
 
             private void UpdateStatus(bool checkAlerts)
