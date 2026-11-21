@@ -97,6 +97,21 @@ namespace XboxBatteryMonitor.Tests
                 AssertTrue(tip.Length <= 63, "Tooltip exceeded 63 chars: " + tip.Length);
             });
 
+            Run("OSD Keyboard MoveSelection reaches leftmost column 0 and wraps cleanly", () =>
+            {
+                using (var kbd = new Program.OsdKeyboardForm())
+                {
+                    // Start at (row=1, col=0 'a') -> move right to col=1 ('s') -> move left back to col=0 ('a')
+                    kbd.MoveSelection(1, 0);
+                    AssertEqual(1, kbd.SelectedCol, "Should move right to col 1");
+                    kbd.MoveSelection(-1, 0);
+                    AssertEqual(0, kbd.SelectedCol, "Should reach leftmost col 0 ('a'), not wrap!");
+                    // Moving left from col 0 should wrap to last key in row 1
+                    kbd.MoveSelection(-1, 0);
+                    AssertTrue(kbd.SelectedCol > 0, "Should wrap from col 0 to last column");
+                }
+            });
+
             Console.WriteLine();
             Console.WriteLine(string.Format("Tests passed: {0}, failed: {1}", _passed, _failed));
             return _failed == 0 ? 0 : 1;

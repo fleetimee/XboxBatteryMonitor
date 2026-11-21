@@ -2002,15 +2002,24 @@ namespace XboxBatteryMonitor
                 if (Visible) Hide();
             }
 
-            public void MoveSelection(int dx, int dy)
+            internal void MoveSelection(int dx, int dy)
             {
                 var rows = CurrentRows();
                 _selRow = (_selRow + dy + rows.Length) % rows.Length;
                 int cols = rows[_selRow].Length;
-                _selCol = Math.Max(0, Math.Min(cols - 1, _selCol + dx));
-                if (dx != 0 && _selCol == 0 && dx < 0) _selCol = cols - 1;
+                if (dx != 0)
+                {
+                    _selCol = (_selCol + dx + cols) % cols;
+                }
+                else if (_selCol >= cols)
+                {
+                    _selCol = cols - 1;
+                }
                 Invalidate();
             }
+
+            internal int SelectedRow { get { return _selRow; } }
+            internal int SelectedCol { get { return _selCol; } }
 
             public void ActivateSelected()
             {
