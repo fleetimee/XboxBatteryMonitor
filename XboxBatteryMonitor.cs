@@ -139,6 +139,27 @@ namespace XboxBatteryMonitor
         [DllImport("user32.dll")]
         private static extern IntPtr SetProcessDpiAwarenessContext(IntPtr dpiContext);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+        [DllImport("shell32.dll")]
+        private static extern int SHQueryUserNotificationState(out int pquns);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
@@ -642,14 +663,14 @@ namespace XboxBatteryMonitor
                 };
                 _desktopTimer.Tick += (s, e) =>
                 {
-                    // Re-check Steam every ~2s (120 ticks) so we never double-input alongside Steam's Desktop Layout
-                    if (_desktopSteamCheckTicks++ >= 120)
+                    // Re-check Steam or fullscreen/borderless game every ~0.5s (30 ticks)
+                    if (_desktopSteamCheckTicks++ >= 30)
                     {
                         _desktopSteamCheckTicks = 0;
-                        bool steamNow = IsSteamRunning();
-                        if (steamNow != _steamPausedDesktop)
+                        bool shouldPause = IsSteamRunning() || IsFullscreenOrBorderlessAppFocused();
+                        if (shouldPause != _steamPausedDesktop)
                         {
-                            _steamPausedDesktop = steamNow;
+                            _steamPausedDesktop = shouldPause;
                             if (_steamPausedDesktop) _desktopController.Reset();
                         }
                     }
@@ -866,7 +887,7 @@ namespace XboxBatteryMonitor
                 _desktopModeEnabled = enabled;
                 if (enabled && _wasConnected)
                 {
-                    _steamPausedDesktop = IsSteamRunning();
+                    _steamPausedDesktop = IsSteamRunning() || IsFullscreenOrBorderlessAppFocused();
                     _desktopSteamCheckTicks = 0;
                     _desktopTimer.Start();
                 }
@@ -874,6 +895,41 @@ namespace XboxBatteryMonitor
                 {
                     _desktopTimer.Stop();
                     _desktopController.Reset();
+                }
+            }
+
+            private static bool IsFullscreenOrBorderlessAppFocused()
+            {
+                try
+                {
+                    int qState;
+                    if (SHQueryUserNotificationState(out qState) == 0 && qState == 3) // QUNS_RUNNING_D3D_FULL_SCREEN
+                    {
+                        return true;
+                    }
+
+                    IntPtr hwnd = GetForegroundWindow();
+                    if (hwnd == IntPtr.Zero) return false;
+
+                    StringBuilder cls = new StringBuilder(64);
+                    GetClassName(hwnd, cls, cls.Capacity);
+                    string className = cls.ToString();
+                    if (className == "Progman" || className == "WorkerW" || className == "Shell_TrayWnd")
+                    {
+                        return false;
+                    }
+
+                    RECT r;
+                    if (!GetWindowRect(hwnd, out r)) return false;
+
+                    Screen scr = Screen.FromHandle(hwnd);
+                    int w = r.Right - r.Left;
+                    int h = r.Bottom - r.Top;
+                    return (w >= scr.Bounds.Width && h >= scr.Bounds.Height);
+                }
+                catch
+                {
+                    return false;
                 }
             }
 
