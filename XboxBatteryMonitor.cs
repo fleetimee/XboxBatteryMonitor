@@ -422,7 +422,64 @@ namespace XboxBatteryMonitor
             return null;
         }
 
-        private class DesktopController
+        internal static bool EvaluateBatteryAlert(int? exactPercent, byte xinputLevel, bool isWired, ref bool notifiedLow)
+        {
+            if (isWired)
+            {
+                notifiedLow = false;
+                return false;
+            }
+
+            bool isLow = exactPercent.HasValue
+                ? exactPercent.Value <= LOW_THRESHOLD_PERCENT
+                : (xinputLevel <= BATTERY_LEVEL_LOW);
+
+            bool isRecovered = exactPercent.HasValue
+                ? exactPercent.Value >= RESET_THRESHOLD_PERCENT
+                : (xinputLevel > BATTERY_LEVEL_LOW);
+
+            if (isLow && !notifiedLow)
+            {
+                return true;
+            }
+            if (isRecovered)
+            {
+                notifiedLow = false;
+            }
+            return false;
+        }
+
+        internal static void UpdateChargingInference(int? exactPercent, bool isWired, ref int? lastPercent, ref bool isCharging)
+        {
+            if (!isWired && exactPercent.HasValue)
+            {
+                if (lastPercent.HasValue)
+                {
+                    if (exactPercent.Value > lastPercent.Value)
+                        isCharging = true;
+                    else if (exactPercent.Value < lastPercent.Value)
+                        isCharging = false;
+                }
+                lastPercent = exactPercent.Value;
+            }
+            else
+            {
+                lastPercent = null;
+                isCharging = false;
+            }
+        }
+
+        internal static string FormatTrayTooltip(string modelName, bool isWired, int? exactPercent, byte xinputLevel)
+        {
+            string tooltip = isWired
+                ? string.Format("{0} (USB)", modelName)
+                : exactPercent.HasValue
+                    ? string.Format("{0}: {1}%", modelName, exactPercent.Value)
+                    : string.Format("{0}: {1}", modelName, LevelText(xinputLevel));
+            return tooltip.Length > 63 ? tooltip.Substring(0, 60) + "..." : tooltip;
+        }
+
+        internal class DesktopController
         {
             // XInput button bitmasks
             private const ushort DPAD_UP = 0x0001;
@@ -539,52 +596,63 @@ namespace XboxBatteryMonitor
                 if (now != prev) SendKey(vk, !now);
             }
 
-            private static void MoveCursorFromStick(short rawX, short rawY)
+            internal static Point ComputeStickCursorDelta(short rawX, short rawY)
             {
                 double mag = Math.Sqrt((double)rawX * rawX + (double)rawY * rawY);
-                if (mag <= STICK_DEADZONE) return;
+                if (mag <= STICK_DEADZONE) return Point.Empty;
 
                 double normMag = Math.Min(1.0, (mag - STICK_DEADZONE) / (32767.0 - STICK_DEADZONE));
                 double speed = normMag * normMag * 18.0; // smooth quadratic curve
                 int dx = (int)Math.Round((rawX / mag) * speed);
                 int dy = (int)Math.Round((-rawY / mag) * speed); // invert Y for screen coords
-                if (dx == 0 && dy == 0) return;
+                return new Point(dx, dy);
+            }
+
+            internal static int ComputeScrollDelta(short rawAxis, ref double accum)
+            {
+                int absAxis = Math.Abs((int)rawAxis);
+                if (absAxis <= STICK_DEADZONE) return 0;
+
+                double norm = Math.Min(1.0, (absAxis - STICK_DEADZONE) / (32767.0 - STICK_DEADZONE));
+                accum += Math.Sign((int)rawAxis) * norm * 36.0;
+                int delta = (int)accum;
+                if (Math.Abs(delta) >= 20)
+                {
+                    accum -= delta;
+                    return delta;
+                }
+                return 0;
+            }
+
+            private static void MoveCursorFromStick(short rawX, short rawY)
+            {
+                Point delta = ComputeStickCursorDelta(rawX, rawY);
+                if (delta.X == 0 && delta.Y == 0) return;
 
                 INPUT[] inp = new INPUT[1];
                 inp[0].type = INPUT_MOUSE;
-                inp[0].u.mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = MOUSEEVENTF_MOVE };
+                inp[0].u.mi = new MOUSEINPUT { dx = delta.X, dy = delta.Y, dwFlags = MOUSEEVENTF_MOVE };
                 SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
             }
 
             private void ScrollFromStick(short rawX, short rawY)
             {
-                if (Math.Abs(rawY) > STICK_DEADZONE)
+                int deltaY = ComputeScrollDelta(rawY, ref _scrollAccumY);
+                if (deltaY != 0)
                 {
-                    double normY = (Math.Abs(rawY) - STICK_DEADZONE) / (32767.0 - STICK_DEADZONE);
-                    _scrollAccumY += Math.Sign(rawY) * normY * 36.0;
-                    int delta = (int)_scrollAccumY;
-                    if (Math.Abs(delta) >= 20)
-                    {
-                        _scrollAccumY -= delta;
-                        INPUT[] inp = new INPUT[1];
-                        inp[0].type = INPUT_MOUSE;
-                        inp[0].u.mi = new MOUSEINPUT { mouseData = unchecked((uint)delta), dwFlags = MOUSEEVENTF_WHEEL };
-                        SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
-                    }
+                    INPUT[] inp = new INPUT[1];
+                    inp[0].type = INPUT_MOUSE;
+                    inp[0].u.mi = new MOUSEINPUT { mouseData = unchecked((uint)deltaY), dwFlags = MOUSEEVENTF_WHEEL };
+                    SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
                 }
-                if (Math.Abs(rawX) > STICK_DEADZONE)
+
+                int deltaX = ComputeScrollDelta(rawX, ref _scrollAccumX);
+                if (deltaX != 0)
                 {
-                    double normX = (Math.Abs(rawX) - STICK_DEADZONE) / (32767.0 - STICK_DEADZONE);
-                    _scrollAccumX += Math.Sign(rawX) * normX * 36.0;
-                    int delta = (int)_scrollAccumX;
-                    if (Math.Abs(delta) >= 20)
-                    {
-                        _scrollAccumX -= delta;
-                        INPUT[] inp = new INPUT[1];
-                        inp[0].type = INPUT_MOUSE;
-                        inp[0].u.mi = new MOUSEINPUT { mouseData = unchecked((uint)delta), dwFlags = MOUSEEVENTF_HWHEEL };
-                        SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
-                    }
+                    INPUT[] inp = new INPUT[1];
+                    inp[0].type = INPUT_MOUSE;
+                    inp[0].u.mi = new MOUSEINPUT { mouseData = unchecked((uint)deltaX), dwFlags = MOUSEEVENTF_HWHEEL };
+                    SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
                 }
             }
 
@@ -798,23 +866,8 @@ namespace XboxBatteryMonitor
                 foreach (var c in controllers)
                 {
                     int idx = c.Slot - 1;
-                    if (!c.IsWired && c.ExactPercent.HasValue)
-                    {
-                        if (_lastPercent[idx].HasValue)
-                        {
-                            if (c.ExactPercent.Value > _lastPercent[idx].Value)
-                                _isChargingInferred[idx] = true;
-                            else if (c.ExactPercent.Value < _lastPercent[idx].Value)
-                                _isChargingInferred[idx] = false;
-                        }
-                        _lastPercent[idx] = c.ExactPercent.Value;
-                        c.IsChargingInferred = _isChargingInferred[idx];
-                    }
-                    else
-                    {
-                        _lastPercent[idx] = null;
-                        _isChargingInferred[idx] = false;
-                    }
+                    UpdateChargingInference(c.ExactPercent, c.IsWired, ref _lastPercent[idx], ref _isChargingInferred[idx]);
+                    c.IsChargingInferred = _isChargingInferred[idx];
                 }
 
                 ControllerSnapshot primary = controllers[0];
@@ -822,11 +875,7 @@ namespace XboxBatteryMonitor
                 SetTrayIcon(primary.ExactPercent, primary.IsWired, primary.XInputLevel);
                 if (!_trayIcon.Visible) _trayIcon.Visible = true;
 
-                string tooltip = primary.IsWired
-                    ? string.Format("{0} (USB)", primary.ModelName)
-                    : primary.ExactPercent.HasValue
-                        ? string.Format("{0}: {1}%", primary.ModelName, primary.ExactPercent.Value)
-                        : string.Format("{0}: {1}", primary.ModelName, LevelText(primary.XInputLevel));
+                string tooltip = FormatTrayTooltip(primary.ModelName, primary.IsWired, primary.ExactPercent, primary.XInputLevel);
                 SetTrayTooltip(tooltip);
 
                 if (justConnected && checkAlerts && !IsSteamRunning())
@@ -849,21 +898,7 @@ namespace XboxBatteryMonitor
                 foreach (var c in controllers)
                 {
                     int idx = c.Slot - 1;
-                    if (c.IsWired)
-                    {
-                        _notifiedLow[idx] = false;
-                        continue;
-                    }
-
-                    bool isLow = c.ExactPercent.HasValue
-                        ? c.ExactPercent.Value <= LOW_THRESHOLD_PERCENT
-                        : (c.XInputLevel <= BATTERY_LEVEL_LOW);
-
-                    bool isRecovered = c.ExactPercent.HasValue
-                        ? c.ExactPercent.Value >= RESET_THRESHOLD_PERCENT
-                        : (c.XInputLevel > BATTERY_LEVEL_LOW);
-
-                    if (isLow && !_notifiedLow[idx])
+                    if (EvaluateBatteryAlert(c.ExactPercent, c.XInputLevel, c.IsWired, ref _notifiedLow[idx]))
                     {
                         if (!IsSteamRunning())
                         {
@@ -874,10 +909,6 @@ namespace XboxBatteryMonitor
                             _trayIcon.ShowBalloonTip(8000, "Low Xbox Controller Battery", msg, ToolTipIcon.Warning);
                             _notifiedLow[idx] = true;
                         }
-                    }
-                    else if (isRecovered)
-                    {
-                        _notifiedLow[idx] = false;
                     }
                 }
             }
