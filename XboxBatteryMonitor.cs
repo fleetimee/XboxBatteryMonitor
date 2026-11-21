@@ -458,9 +458,16 @@ namespace XboxBatteryMonitor
                     {
                         _wasConnected = false;
                         SetTrayTooltip("Xbox Controller: Disconnected");
-                        _trayIcon.ShowBalloonTip(4000, "Xbox Controller", "Controller disconnected.", ToolTipIcon.Info);
-                        _hideTimer.Stop();
-                        _hideTimer.Start();
+                        if (!IsSteamRunning())
+                        {
+                            _trayIcon.ShowBalloonTip(4000, "Xbox Controller", "Controller disconnected.", ToolTipIcon.Info);
+                            _hideTimer.Stop();
+                            _hideTimer.Start();
+                        }
+                        else
+                        {
+                            _trayIcon.Visible = false;
+                        }
                     }
                     else
                     {
@@ -516,7 +523,7 @@ namespace XboxBatteryMonitor
                         : string.Format("{0}: {1}", primary.ModelName, LevelText(primary.XInputLevel));
                 SetTrayTooltip(tooltip);
 
-                if (justConnected && checkAlerts)
+                if (justConnected && checkAlerts && !IsSteamRunning())
                 {
                     string connectMsg = primary.IsWired
                         ? string.Format("{0} connected (USB Powered).", primary.ModelName)
