@@ -24,7 +24,10 @@ if ($needsBuild) {
 }
 
 # Remove legacy Scheduled Task if present
+$prevPref = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 schtasks.exe /Delete /TN "XboxBatteryMonitor" /F 2>$null | Out-Null
+$ErrorActionPreference = $prevPref
 
 # Create Startup folder shortcut (no Task Scheduler needed)
 $startupDir = [Environment]::GetFolderPath('Startup')
@@ -36,8 +39,8 @@ $shortcut.WorkingDirectory = $PSScriptRoot
 $shortcut.Description = 'Xbox Controller Battery Monitor'
 $shortcut.Save()
 
-# Launch watcher now
-Start-Process -FilePath $exePath
-Start-Sleep -Seconds 1
+# Launch watcher detached via Explorer (same as Windows Startup)
+Start-Process explorer.exe -ArgumentList "`"$shortcutPath`""
+Start-Sleep -Seconds 2
 Get-Process XboxBatteryMonitor -ErrorAction SilentlyContinue |
     Select-Object Name, Id, @{N='RAM_MB';E={[math]::Round($_.WorkingSet64 / 1MB, 1)}}
