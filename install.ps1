@@ -3,7 +3,16 @@ $ErrorActionPreference = 'Stop'
 $exePath = Join-Path $PSScriptRoot 'XboxBatteryMonitor.exe'
 $csPath = Join-Path $PSScriptRoot 'XboxBatteryMonitor.cs'
 
-if (-not (Test-Path $exePath)) {
+# Stop any running instance before compiling
+Stop-Process -Name 'XboxBatteryMonitor' -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 300
+
+# Compile if exe is missing or source is newer
+$needsBuild = -not (Test-Path $exePath)
+if (-not $needsBuild) {
+    $needsBuild = (Get-Item $csPath).LastWriteTime -gt (Get-Item $exePath).LastWriteTime
+}
+if ($needsBuild) {
     $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     if (-not (Test-Path $csc)) {
         throw "Could not find .NET Framework compiler at $csc"
@@ -14,24 +23,21 @@ if (-not (Test-Path $exePath)) {
     }
 }
 
-$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$templatePath = Join-Path $PSScriptRoot 'XboxBatteryMonitorTask.xml'
-$tempXmlPath = Join-Path $env:TEMP 'XboxBatteryMonitorTask.user.xml'
+# Remove legacy Scheduled Task if present
+schtasks.exe /Delete /TN "XboxBatteryMonitor" /F 2>$null | Out-Null
 
-$content = [System.IO.File]::ReadAllText($templatePath).
-    Replace('__USER__', $user).
-    Replace('__EXE_PATH__', $exePath)
-[System.IO.File]::WriteAllText($tempXmlPath, $content, [System.Text.Encoding]::Unicode)
+# Create Startup folder shortcut (no Task Scheduler needed)
+$startupDir = [Environment]::GetFolderPath('Startup')
+$shortcutPath = Join-Path $startupDir 'XboxBatteryMonitor.lnk'
+$wsh = New-Object -ComObject WScript.Shell
+$shortcut = $wsh.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $exePath
+$shortcut.WorkingDirectory = $PSScriptRoot
+$shortcut.Description = 'Xbox Controller Battery Monitor'
+$shortcut.Save()
 
-try {
-    schtasks.exe /Create /TN "XboxBatteryMonitor" /XML $tempXmlPath /F
-    if ($LASTEXITCODE -eq 0) {
-        schtasks.exe /Run /TN "XboxBatteryMonitor"
-        Start-Sleep -Seconds 2
-        Get-Process XboxBatteryMonitor -ErrorAction SilentlyContinue |
-            Select-Object Name, Id, @{N='RAM_MB';E={[math]::Round($_.WorkingSet64 / 1MB, 1)}}
-    }
-}
-finally {
-    Remove-Item $tempXmlPath -Force -ErrorAction SilentlyContinue
-}
+# Launch watcher now
+Start-Process -FilePath $exePath
+Start-Sleep -Seconds 1
+Get-Process XboxBatteryMonitor -ErrorAction SilentlyContinue |
+    Select-Object Name, Id, @{N='RAM_MB';E={[math]::Round($_.WorkingSet64 / 1MB, 1)}}

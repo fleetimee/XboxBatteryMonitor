@@ -133,6 +133,29 @@ namespace XboxBatteryMonitor
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool DestroyIcon(IntPtr hIcon);
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr RegisterDeviceNotification(IntPtr hRecipient, IntPtr NotificationFilter, int Flags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool UnregisterDeviceNotification(IntPtr Handle);
+
+        private const int WM_DEVICECHANGE = 0x0219;
+        private const int DBT_DEVICEARRIVAL = 0x8000;
+        private const int DBT_DEVICEREMOVECOMPLETE = 0x8004;
+        private const int DBT_DEVNODES_CHANGED = 0x0007;
+        private const int DEVICE_NOTIFY_WINDOW_HANDLE = 0x00000000;
+        private const int DBT_DEVTYP_DEVICEINTERFACE = 0x00000005;
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct DEV_BROADCAST_DEVICEINTERFACE
+        {
+            public int dbcc_size;
+            public int dbcc_devicetype;
+            public int dbcc_reserved;
+            public Guid dbcc_classguid;
+            public short dbcc_name;
+        }
+
         [DllImport("user32.dll")]
         private static extern bool SetProcessDPIAware();
 
@@ -162,21 +185,6 @@ namespace XboxBatteryMonitor
             using (Mutex mutex = new Mutex(true, @"Local\XboxBatteryMonitor_SingleInstance", out createdNew))
             {
                 if (!createdNew && !testMode)
-                {
-                    return;
-                }
-
-                // Wait briefly on startup in case PnP event fired slightly before XInput is ready
-                if (!testMode)
-                {
-                    for (int i = 0; i < 10; i++)
-                    {
-                        if (IsAnyControllerConnected()) break;
-                        Thread.Sleep(1000);
-                    }
-                }
-
-                if (!IsAnyControllerConnected() && !testMode)
                 {
                     return;
                 }
@@ -365,14 +373,72 @@ namespace XboxBatteryMonitor
             return null;
         }
 
+        private class DeviceWatcherWindow : NativeWindow, IDisposable
+        {
+            private readonly Action _onDeviceChanged;
+            private IntPtr _notifyHandle = IntPtr.Zero;
+
+            public DeviceWatcherWindow(Action onDeviceChanged)
+            {
+                _onDeviceChanged = onDeviceChanged;
+                CreateParams cp = new CreateParams();
+                CreateHandle(cp);
+
+                DEV_BROADCAST_DEVICEINTERFACE dbi = new DEV_BROADCAST_DEVICEINTERFACE
+                {
+                    dbcc_size = Marshal.SizeOf(typeof(DEV_BROADCAST_DEVICEINTERFACE)),
+                    dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE,
+                    dbcc_classguid = new Guid("4D1E55B2-F16F-11CF-88CB-001111000030") // GUID_DEVINTERFACE_HID
+                };
+
+                IntPtr buffer = Marshal.AllocHGlobal(dbi.dbcc_size);
+                try
+                {
+                    Marshal.StructureToPtr(dbi, buffer, false);
+                    _notifyHandle = RegisterDeviceNotification(Handle, buffer, DEVICE_NOTIFY_WINDOW_HANDLE);
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+
+            protected override void WndProc(ref Message m)
+            {
+                if (m.Msg == WM_DEVICECHANGE)
+                {
+                    int wParam = m.WParam.ToInt32();
+                    if (wParam == DBT_DEVICEARRIVAL || wParam == DBT_DEVICEREMOVECOMPLETE || wParam == DBT_DEVNODES_CHANGED)
+                    {
+                        _onDeviceChanged();
+                    }
+                }
+                base.WndProc(ref m);
+            }
+
+            public void Dispose()
+            {
+                if (_notifyHandle != IntPtr.Zero)
+                {
+                    UnregisterDeviceNotification(_notifyHandle);
+                    _notifyHandle = IntPtr.Zero;
+                }
+                if (Handle != IntPtr.Zero)
+                {
+                    DestroyHandle();
+                }
+            }
+        }
+
         private class MonitorContext : ApplicationContext
         {
             private readonly NotifyIcon _trayIcon;
             private readonly System.Windows.Forms.Timer _pollTimer;
+            private readonly System.Windows.Forms.Timer _debounceTimer;
+            private readonly DeviceWatcherWindow _watcher;
             private readonly bool[] _notifiedLow = new bool[4];
             private readonly int?[] _lastPercent = new int?[4];
             private readonly bool[] _isChargingInferred = new bool[4];
-            private int _disconnectedChecks = 0;
             private IntPtr _currentHIcon = IntPtr.Zero;
             private DetailsForm _detailsForm;
 
@@ -386,24 +452,40 @@ namespace XboxBatteryMonitor
 
                 _trayIcon = new NotifyIcon
                 {
-                    Visible = true,
+                    Visible = false,
                     ContextMenuStrip = menu
                 };
                 _trayIcon.DoubleClick += (s, e) => ShowDetails();
-
-                UpdateStatus(checkAlerts: !testMode);
-
-                if (testMode)
-                {
-                    ShowTestNotification();
-                }
 
                 _pollTimer = new System.Windows.Forms.Timer
                 {
                     Interval = POLL_INTERVAL_MS
                 };
                 _pollTimer.Tick += (s, e) => UpdateStatus(checkAlerts: true);
-                _pollTimer.Start();
+
+                _debounceTimer = new System.Windows.Forms.Timer
+                {
+                    Interval = 1500
+                };
+                _debounceTimer.Tick += (s, e) =>
+                {
+                    _debounceTimer.Stop();
+                    UpdateStatus(checkAlerts: true);
+                };
+
+                _watcher = new DeviceWatcherWindow(() =>
+                {
+                    _debounceTimer.Stop();
+                    _debounceTimer.Start();
+                });
+
+                UpdateStatus(checkAlerts: !testMode);
+
+                if (testMode)
+                {
+                    _trayIcon.Visible = true;
+                    ShowTestNotification();
+                }
             }
 
             private void UpdateStatus(bool checkAlerts)
@@ -412,7 +494,6 @@ namespace XboxBatteryMonitor
 
                 if (controllers.Count == 0)
                 {
-                    _disconnectedChecks++;
                     for (int i = 0; i < 4; i++)
                     {
                         _notifiedLow[i] = false;
@@ -420,22 +501,20 @@ namespace XboxBatteryMonitor
                         _isChargingInferred[i] = false;
                     }
 
-                    SetTrayIcon(null, false);
-                    SetTrayTooltip("Xbox Controller: Disconnected");
+                    _pollTimer.Stop();
+                    _trayIcon.Visible = false;
 
                     if (_detailsForm != null && !_detailsForm.IsDisposed && _detailsForm.Visible)
                     {
                         _detailsForm.UpdateData(controllers);
                     }
-
-                    if (_disconnectedChecks >= 2)
-                    {
-                        ExitApplication();
-                    }
                     return;
                 }
 
-                _disconnectedChecks = 0;
+                if (!_pollTimer.Enabled)
+                {
+                    _pollTimer.Start();
+                }
                 foreach (var c in controllers)
                 {
                     int idx = c.Slot - 1;
@@ -461,6 +540,7 @@ namespace XboxBatteryMonitor
                 ControllerSnapshot primary = controllers[0];
 
                 SetTrayIcon(primary.ExactPercent, primary.IsWired, primary.XInputLevel);
+                if (!_trayIcon.Visible) _trayIcon.Visible = true;
 
                 string tooltip = primary.IsWired
                     ? string.Format("{0} (USB)", primary.ModelName)
@@ -686,6 +766,8 @@ namespace XboxBatteryMonitor
             private void ExitApplication()
             {
                 _pollTimer.Stop();
+                _debounceTimer.Stop();
+                _watcher.Dispose();
                 _trayIcon.Visible = false;
                 if (_currentHIcon != IntPtr.Zero)
                 {
