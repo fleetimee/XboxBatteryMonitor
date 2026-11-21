@@ -132,6 +132,12 @@ namespace XboxBatteryMonitor
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool DestroyIcon(IntPtr hIcon);
 
+        [DllImport("user32.dll")]
+        private static extern bool SetProcessDPIAware();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetProcessDpiAwarenessContext(IntPtr dpiContext);
+
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
@@ -143,6 +149,9 @@ namespace XboxBatteryMonitor
         [STAThread]
         static void Main(string[] args)
         {
+            try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } // Per-Monitor V2
+            catch { try { SetProcessDPIAware(); } catch { } }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
@@ -795,9 +804,11 @@ namespace XboxBatteryMonitor
                 _onTestNotify = onTestNotify;
 
                 Text = "Xbox Controller";
-                FormBorderStyle = FormBorderStyle.FixedSingle;
+                FormBorderStyle = FormBorderStyle.FixedDialog;
+                ShowIcon = false;
                 MaximizeBox = false;
                 MinimizeBox = false;
+                AutoScaleMode = AutoScaleMode.Dpi;
                 StartPosition = FormStartPosition.Manual;
                 ClientSize = new Size(348, 224);
                 BackColor = Color.FromArgb(32, 32, 34);
