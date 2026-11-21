@@ -133,30 +133,6 @@ namespace XboxBatteryMonitor
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool DestroyIcon(IntPtr hIcon);
 
-        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern IntPtr RegisterDeviceNotification(IntPtr hRecipient, IntPtr NotificationFilter, int Flags);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool UnregisterDeviceNotification(IntPtr Handle);
-
-        private const int WM_DEVICECHANGE = 0x0219;
-        private const int DBT_DEVICEARRIVAL = 0x8000;
-        private const int DBT_DEVICEREMOVECOMPLETE = 0x8004;
-        private const int DBT_DEVNODES_CHANGED = 0x0007;
-        private const int DEVICE_NOTIFY_WINDOW_HANDLE = 0x00000000;
-        private const int DEVICE_NOTIFY_ALL_INTERFACE_CLASSES = 0x00000004;
-        private const int DBT_DEVTYP_DEVICEINTERFACE = 0x00000005;
-
-        [StructLayout(LayoutKind.Sequential)]
-        struct DEV_BROADCAST_DEVICEINTERFACE
-        {
-            public int dbcc_size;
-            public int dbcc_devicetype;
-            public int dbcc_reserved;
-            public Guid dbcc_classguid;
-            public short dbcc_name;
-        }
-
         [DllImport("user32.dll")]
         private static extern bool SetProcessDPIAware();
 
@@ -374,74 +350,14 @@ namespace XboxBatteryMonitor
             return null;
         }
 
-        private class DeviceWatcherWindow : NativeWindow, IDisposable
-        {
-            private readonly Action _onDeviceChanged;
-            private IntPtr _notifyHandle = IntPtr.Zero;
-
-            public DeviceWatcherWindow(Action onDeviceChanged)
-            {
-                _onDeviceChanged = onDeviceChanged;
-                CreateParams cp = new CreateParams();
-                CreateHandle(cp);
-
-                DEV_BROADCAST_DEVICEINTERFACE dbi = new DEV_BROADCAST_DEVICEINTERFACE
-                {
-                    dbcc_size = Marshal.SizeOf(typeof(DEV_BROADCAST_DEVICEINTERFACE)),
-                    dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE,
-                    dbcc_classguid = Guid.Empty
-                };
-
-                IntPtr buffer = Marshal.AllocHGlobal(dbi.dbcc_size);
-                try
-                {
-                    Marshal.StructureToPtr(dbi, buffer, false);
-                    _notifyHandle = RegisterDeviceNotification(Handle, buffer, DEVICE_NOTIFY_WINDOW_HANDLE | DEVICE_NOTIFY_ALL_INTERFACE_CLASSES);
-                }
-                finally
-                {
-                    Marshal.FreeHGlobal(buffer);
-                }
-            }
-
-            protected override void WndProc(ref Message m)
-            {
-                if (m.Msg == WM_DEVICECHANGE)
-                {
-                    int wParam = m.WParam.ToInt32();
-                    if (wParam == DBT_DEVICEARRIVAL || wParam == DBT_DEVICEREMOVECOMPLETE || wParam == DBT_DEVNODES_CHANGED)
-                    {
-                        _onDeviceChanged();
-                    }
-                }
-                base.WndProc(ref m);
-            }
-
-            public void Dispose()
-            {
-                if (_notifyHandle != IntPtr.Zero)
-                {
-                    UnregisterDeviceNotification(_notifyHandle);
-                    _notifyHandle = IntPtr.Zero;
-                }
-                if (Handle != IntPtr.Zero)
-                {
-                    DestroyHandle();
-                }
-            }
-        }
-
         private class MonitorContext : ApplicationContext
         {
             private readonly NotifyIcon _trayIcon;
             private readonly System.Windows.Forms.Timer _pollTimer;
-            private readonly System.Windows.Forms.Timer _debounceTimer;
             private readonly System.Windows.Forms.Timer _idleCheckTimer;
-            private readonly DeviceWatcherWindow _watcher;
             private readonly bool[] _notifiedLow = new bool[4];
             private readonly int?[] _lastPercent = new int?[4];
             private readonly bool[] _isChargingInferred = new bool[4];
-            private int _retryBurstLeft = 0;
             private IntPtr _currentHIcon = IntPtr.Zero;
             private DetailsForm _detailsForm;
 
@@ -455,7 +371,8 @@ namespace XboxBatteryMonitor
 
                 _trayIcon = new NotifyIcon
                 {
-                    Visible = false,
+                    Icon = SystemIcons.Application,
+                    Visible = true,
                     ContextMenuStrip = menu
                 };
                 _trayIcon.DoubleClick += (s, e) => ShowDetails();
@@ -466,23 +383,10 @@ namespace XboxBatteryMonitor
                 };
                 _pollTimer.Tick += (s, e) => UpdateStatus(checkAlerts: true);
 
-                _debounceTimer = new System.Windows.Forms.Timer
-                {
-                    Interval = 1500
-                };
-                _debounceTimer.Tick += (s, e) =>
-                {
-                    UpdateStatus(checkAlerts: true);
-                    if (IsAnyControllerConnected() || --_retryBurstLeft <= 0)
-                    {
-                        _debounceTimer.Stop();
-                    }
-                };
-
-                // Lightweight fallback in case Bluetooth LE wakes without a WM_DEVICECHANGE broadcast
+                // Lightweight 5s check when disconnected (1 XInputGetState call = 0% CPU)
                 _idleCheckTimer = new System.Windows.Forms.Timer
                 {
-                    Interval = 10000
+                    Interval = 5000
                 };
                 _idleCheckTimer.Tick += (s, e) =>
                 {
@@ -492,13 +396,6 @@ namespace XboxBatteryMonitor
                         UpdateStatus(checkAlerts: true);
                     }
                 };
-
-                _watcher = new DeviceWatcherWindow(() =>
-                {
-                    _retryBurstLeft = 5;
-                    _debounceTimer.Stop();
-                    _debounceTimer.Start();
-                });
 
                 UpdateStatus(checkAlerts: !testMode);
 
@@ -789,9 +686,7 @@ namespace XboxBatteryMonitor
             private void ExitApplication()
             {
                 _pollTimer.Stop();
-                _debounceTimer.Stop();
                 _idleCheckTimer.Stop();
-                _watcher.Dispose();
                 _trayIcon.Visible = false;
                 if (_currentHIcon != IntPtr.Zero)
                 {
