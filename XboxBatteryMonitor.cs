@@ -153,6 +153,9 @@ namespace XboxBatteryMonitor
         private static extern IntPtr GetForegroundWindow();
 
         [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("user32.dll")]
         private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -851,11 +854,12 @@ namespace XboxBatteryMonitor
                     double dt = desktopSw.Elapsed.TotalSeconds;
                     desktopSw.Restart();
 
-                    // Re-check Steam Desktop Layout or fullscreen/borderless game every ~0.5s
+                    // Re-check Steam Desktop Layout, UWP system menus, or fullscreen/borderless game every ~0.5s
                     if (_desktopSteamCheckTicks++ >= 60)
                     {
                         _desktopSteamCheckTicks = 0;
-                        bool shouldPause = IsSteamDesktopLayoutActive() || IsFullscreenOrBorderlessAppFocused();
+                        bool osdOpen = (_osdKeyboard != null && _osdKeyboard.Visible);
+                        bool shouldPause = !osdOpen && (IsSteamDesktopLayoutActive() || IsFullscreenOrBorderlessAppFocused() || IsUwpGamepadAppFocused());
                         if (shouldPause != _steamPausedDesktop)
                         {
                             _steamPausedDesktop = shouldPause;
@@ -1055,7 +1059,8 @@ namespace XboxBatteryMonitor
                 _desktopModeEnabled = enabled;
                 if (enabled && _wasConnected)
                 {
-                    _steamPausedDesktop = IsSteamDesktopLayoutActive() || IsFullscreenOrBorderlessAppFocused();
+                    bool osdOpen = (_osdKeyboard != null && _osdKeyboard.Visible);
+                    _steamPausedDesktop = !osdOpen && (IsSteamDesktopLayoutActive() || IsFullscreenOrBorderlessAppFocused() || IsUwpGamepadAppFocused());
                     _desktopSteamCheckTicks = 0;
                     _desktopTimer.Start();
                 }
@@ -1067,6 +1072,34 @@ namespace XboxBatteryMonitor
                 if (_layoutForm != null && !_layoutForm.IsDisposed && _layoutForm.Visible)
                 {
                     _layoutForm.RefreshStatus();
+                }
+            }
+
+            private static bool IsUwpGamepadAppFocused()
+            {
+                try
+                {
+                    IntPtr hwnd = GetForegroundWindow();
+                    if (hwnd == IntPtr.Zero) return false;
+
+                    uint pid;
+                    GetWindowThreadProcessId(hwnd, out pid);
+                    if (pid == 0) return false;
+
+                    using (Process proc = Process.GetProcessById((int)pid))
+                    {
+                        string name = proc.ProcessName;
+                        return name.Equals("SearchHost", StringComparison.OrdinalIgnoreCase)
+                            || name.Equals("StartMenuExperienceHost", StringComparison.OrdinalIgnoreCase)
+                            || name.Equals("ShellExperienceHost", StringComparison.OrdinalIgnoreCase)
+                            || name.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase)
+                            || name.Equals("SystemSettings", StringComparison.OrdinalIgnoreCase)
+                            || name.Equals("GameBar", StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+                catch
+                {
+                    return false;
                 }
             }
 
