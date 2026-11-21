@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
@@ -447,18 +448,26 @@ namespace XboxBatteryMonitor
 
                     if (isLow && !_notifiedLow[idx])
                     {
-                        string msg = c.ExactPercent.HasValue
-                            ? string.Format("{0} (Slot {1}) is at {2}%. Please charge or swap batteries.", c.ModelName, c.Slot, c.ExactPercent.Value)
-                            : string.Format("{0} (Slot {1}) battery is low (below ~20%).", c.ModelName, c.Slot);
+                        if (!IsSteamRunning())
+                        {
+                            string msg = c.ExactPercent.HasValue
+                                ? string.Format("{0} (Slot {1}) is at {2}%. Please charge or swap batteries.", c.ModelName, c.Slot, c.ExactPercent.Value)
+                                : string.Format("{0} (Slot {1}) battery is low (below ~20%).", c.ModelName, c.Slot);
 
-                        _trayIcon.ShowBalloonTip(8000, "Low Xbox Controller Battery", msg, ToolTipIcon.Warning);
-                        _notifiedLow[idx] = true;
+                            _trayIcon.ShowBalloonTip(8000, "Low Xbox Controller Battery", msg, ToolTipIcon.Warning);
+                            _notifiedLow[idx] = true;
+                        }
                     }
                     else if (isRecovered)
                     {
                         _notifiedLow[idx] = false;
                     }
                 }
+            }
+
+            private static bool IsSteamRunning()
+            {
+                return Process.GetProcessesByName("steam").Length > 0;
             }
 
             private void ShowTestNotification()
