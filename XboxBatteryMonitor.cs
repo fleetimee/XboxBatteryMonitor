@@ -382,7 +382,7 @@ namespace XboxBatteryMonitor
 
                 _hideTimer = new System.Windows.Forms.Timer
                 {
-                    Interval = 4500
+                    Interval = 8500
                 };
                 _hideTimer.Tick += (s, e) =>
                 {
@@ -460,7 +460,7 @@ namespace XboxBatteryMonitor
                         SetTrayTooltip("Xbox Controller: Disconnected");
                         if (!IsSteamRunning())
                         {
-                            _trayIcon.ShowBalloonTip(4000, "Xbox Controller", "Controller disconnected.", ToolTipIcon.Info);
+                            _trayIcon.ShowBalloonTip(5000, "Xbox Controller", "Controller disconnected.", ToolTipIcon.None);
                             _hideTimer.Stop();
                             _hideTimer.Start();
                         }
@@ -530,7 +530,7 @@ namespace XboxBatteryMonitor
                         : primary.ExactPercent.HasValue
                             ? string.Format("{0} connected — Battery: {1}% ({2}).", primary.ModelName, primary.ExactPercent.Value, primary.ConnectionType)
                             : string.Format("{0} connected — Battery: {1} ({2}).", primary.ModelName, LevelText(primary.XInputLevel), primary.ConnectionType);
-                    _trayIcon.ShowBalloonTip(4000, "Xbox Controller Connected", connectMsg, ToolTipIcon.Info);
+                    _trayIcon.ShowBalloonTip(5000, "Xbox Controller Connected", connectMsg, ToolTipIcon.None);
                 }
 
                 if (_detailsForm != null && !_detailsForm.IsDisposed && _detailsForm.Visible)

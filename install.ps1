@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $exePath = Join-Path $PSScriptRoot 'XboxBatteryMonitor.exe'
 $csPath = Join-Path $PSScriptRoot 'XboxBatteryMonitor.cs'
+$icoPath = Join-Path $PSScriptRoot 'XboxBatteryMonitor.ico'
 
 # Stop any running instance before compiling
 Stop-Process -Name 'XboxBatteryMonitor' -Force -ErrorAction SilentlyContinue
@@ -17,7 +18,11 @@ if ($needsBuild) {
     if (-not (Test-Path $csc)) {
         throw "Could not find .NET Framework compiler at $csc"
     }
-    & $csc /nologo /target:winexe /optimize+ "/out:$exePath" $csPath
+    if (Test-Path $icoPath) {
+        & $csc /nologo /target:winexe /optimize+ "/win32icon:$icoPath" "/out:$exePath" $csPath
+    } else {
+        & $csc /nologo /target:winexe /optimize+ "/out:$exePath" $csPath
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "Compilation failed."
     }
