@@ -513,31 +513,73 @@ namespace XboxBatteryMonitor
                     : xinputLevel == BATTERY_LEVEL_LOW ? 15
                     : 5;
 
-                Color fillColor = isWired ? Color.FromArgb(56, 189, 248) // Sky blue for USB
-                    : fillPct <= 20 ? Color.FromArgb(239, 68, 68)       // Red
-                    : fillPct <= 40 ? Color.FromArgb(245, 158, 11)      // Amber
-                    : Color.FromArgb(34, 197, 94);                      // Green
+                // Soft Win11 Fluent palette matching the native taskbar battery icon
+                Color fillColor = isWired ? Color.FromArgb(125, 211, 252) // Soft sky blue (USB)
+                    : fillPct <= 20 ? Color.FromArgb(248, 113, 113)       // Soft red
+                    : fillPct <= 40 ? Color.FromArgb(252, 211, 77)        // Soft amber
+                    : Color.FromArgb(134, 239, 172);                      // Soft mint green (matches Win11 battery)
 
-                using (Bitmap bmp = new Bitmap(16, 16))
+                Color strokeColor = IsLightTaskbar() ? Color.FromArgb(32, 32, 32) : Color.FromArgb(242, 242, 242);
+
+                using (Bitmap bmp = new Bitmap(32, 32))
                 using (Graphics g = Graphics.FromImage(bmp))
                 {
-                    g.SmoothingMode = SmoothingMode.None;
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                     g.Clear(Color.Transparent);
 
-                    // Battery body outline
-                    using (Pen outline = new Pen(Color.White, 1))
+                    // 1. Fluent-style Xbox controller silhouette (upper 2/3, centered)
+                    using (GraphicsPath pad = new GraphicsPath())
                     {
-                        g.DrawRectangle(outline, 1, 3, 11, 9);
-                        // Battery terminal nub
-                        g.FillRectangle(Brushes.White, 13, 6, 2, 4);
+                        pad.AddArc(3f, 4f, 8f, 8f, 180, 90);
+                        pad.AddLine(7f, 4f, 25f, 4f);
+                        pad.AddArc(21f, 4f, 8f, 8f, 270, 90);
+                        pad.AddLine(29f, 8f, 30f, 16f);
+                        pad.AddArc(24f, 14f, 6f, 6f, 0, 145);
+                        pad.AddLine(25f, 19f, 21f, 15f);
+                        pad.AddLine(21f, 15f, 11f, 15f);
+                        pad.AddLine(11f, 15f, 7f, 19f);
+                        pad.AddArc(2f, 14f, 6f, 6f, 35, 145);
+                        pad.AddLine(2f, 16f, 3f, 8f);
+                        pad.CloseFigure();
+
+                        using (Pen strokePen = new Pen(strokeColor, 2.0f) { LineJoin = LineJoin.Round })
+                        {
+                            g.DrawPath(strokePen, pad);
+                        }
                     }
 
-                    // Fill bar
-                    int maxFillWidth = 9;
-                    int fillWidth = Math.Max(1, (int)Math.Round(maxFillWidth * (fillPct / 100.0)));
-                    using (SolidBrush brush = new SolidBrush(fillColor))
+                    // Subtle thumbstick & button accents
+                    using (SolidBrush accentBrush = new SolidBrush(strokeColor))
                     {
-                        g.FillRectangle(brush, 2, 4, fillWidth, 8);
+                        g.FillEllipse(accentBrush, 7.5f, 8.2f, 2.8f, 2.8f);   // Left stick
+                        g.FillEllipse(accentBrush, 21.5f, 8.2f, 2.8f, 2.8f);  // ABXY cluster
+                    }
+
+                    // 2. Rounded Win11-style battery pill below the controller
+                    RectangleF pillRect = new RectangleF(4f, 22.5f, 22f, 6.5f);
+                    using (GraphicsPath pillPath = CreateRoundedRect(pillRect, 2.5f))
+                    {
+                        using (Pen pillPen = new Pen(strokeColor, 1.6f))
+                        {
+                            g.DrawPath(pillPen, pillPath);
+                        }
+                    }
+
+                    // Battery terminal nub
+                    using (SolidBrush nubBrush = new SolidBrush(strokeColor))
+                    {
+                        g.FillRectangle(nubBrush, 27f, 24.5f, 1.8f, 2.6f);
+                    }
+
+                    // Battery fill bar inside pill
+                    float maxInnerW = 18.4f;
+                    float fillW = Math.Max(2.5f, maxInnerW * (fillPct / 100.0f));
+                    RectangleF fillRect = new RectangleF(5.8f, 24.1f, fillW, 3.3f);
+                    using (GraphicsPath fillPath = CreateRoundedRect(fillRect, 1.2f))
+                    using (SolidBrush fillBrush = new SolidBrush(fillColor))
+                    {
+                        g.FillPath(fillBrush, fillPath);
                     }
 
                     IntPtr newHIcon = bmp.GetHicon();
@@ -549,6 +591,33 @@ namespace XboxBatteryMonitor
                         DestroyIcon(_currentHIcon);
                     }
                     _currentHIcon = newHIcon;
+                }
+            }
+
+            private static GraphicsPath CreateRoundedRect(RectangleF bounds, float radius)
+            {
+                GraphicsPath path = new GraphicsPath();
+                float d = radius * 2f;
+                path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
+                path.AddArc(bounds.Right - d, bounds.Y, d, d, 270, 90);
+                path.AddArc(bounds.Right - d, bounds.Bottom - d, d, d, 0, 90);
+                path.AddArc(bounds.X, bounds.Bottom - d, d, d, 90, 90);
+                path.CloseFigure();
+                return path;
+            }
+
+            private static bool IsLightTaskbar()
+            {
+                try
+                {
+                    object val = Microsoft.Win32.Registry.GetValue(
+                        @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                        "SystemUsesLightTheme", 0);
+                    return val is int && (int)val == 1;
+                }
+                catch
+                {
+                    return false;
                 }
             }
 
