@@ -474,6 +474,7 @@ namespace XboxBatteryMonitor
                     return;
                 }
 
+                bool justConnected = !_wasConnected;
                 _hideTimer.Stop();
                 _wasConnected = true;
                 _idleCheckTimer.Stop();
@@ -514,6 +515,16 @@ namespace XboxBatteryMonitor
                         ? string.Format("{0}: {1}%", primary.ModelName, primary.ExactPercent.Value)
                         : string.Format("{0}: {1}", primary.ModelName, LevelText(primary.XInputLevel));
                 SetTrayTooltip(tooltip);
+
+                if (justConnected && checkAlerts)
+                {
+                    string connectMsg = primary.IsWired
+                        ? string.Format("{0} connected (USB Powered).", primary.ModelName)
+                        : primary.ExactPercent.HasValue
+                            ? string.Format("{0} connected — Battery: {1}% ({2}).", primary.ModelName, primary.ExactPercent.Value, primary.ConnectionType)
+                            : string.Format("{0} connected — Battery: {1} ({2}).", primary.ModelName, LevelText(primary.XInputLevel), primary.ConnectionType);
+                    _trayIcon.ShowBalloonTip(4000, "Xbox Controller Connected", connectMsg, ToolTipIcon.Info);
+                }
 
                 if (_detailsForm != null && !_detailsForm.IsDisposed && _detailsForm.Visible)
                 {
