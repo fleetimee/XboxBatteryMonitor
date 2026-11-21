@@ -21,5 +21,5 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 ## Uninstall
 ```powershell
-schtasks /Delete /TN "XboxBatteryMonitor" /F
+powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 ```
