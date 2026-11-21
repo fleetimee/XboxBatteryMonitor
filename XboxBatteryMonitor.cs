@@ -610,6 +610,8 @@ namespace XboxBatteryMonitor
             private readonly bool[] _isChargingInferred = new bool[4];
             private bool _wasConnected = false;
             private bool _desktopModeEnabled = false;
+            private bool _steamPausedDesktop = false;
+            private int _desktopSteamCheckTicks = 0;
             private int _connectedTicks = 0;
             private IntPtr _currentHIcon = IntPtr.Zero;
             private DetailsForm _detailsForm;
@@ -638,7 +640,24 @@ namespace XboxBatteryMonitor
                 {
                     Interval = 16 // ~60 Hz mouse/input polling only when Desktop Control is enabled
                 };
-                _desktopTimer.Tick += (s, e) => _desktopController.Tick();
+                _desktopTimer.Tick += (s, e) =>
+                {
+                    // Re-check Steam every ~2s (120 ticks) so we never double-input alongside Steam's Desktop Layout
+                    if (_desktopSteamCheckTicks++ >= 120)
+                    {
+                        _desktopSteamCheckTicks = 0;
+                        bool steamNow = IsSteamRunning();
+                        if (steamNow != _steamPausedDesktop)
+                        {
+                            _steamPausedDesktop = steamNow;
+                            if (_steamPausedDesktop) _desktopController.Reset();
+                        }
+                    }
+                    if (!_steamPausedDesktop)
+                    {
+                        _desktopController.Tick();
+                    }
+                };
 
                 _hideTimer = new System.Windows.Forms.Timer
                 {
@@ -847,6 +866,8 @@ namespace XboxBatteryMonitor
                 _desktopModeEnabled = enabled;
                 if (enabled && _wasConnected)
                 {
+                    _steamPausedDesktop = IsSteamRunning();
+                    _desktopSteamCheckTicks = 0;
                     _desktopTimer.Start();
                 }
                 else
