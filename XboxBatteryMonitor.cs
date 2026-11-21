@@ -144,6 +144,7 @@ namespace XboxBatteryMonitor
         private const int DBT_DEVICEREMOVECOMPLETE = 0x8004;
         private const int DBT_DEVNODES_CHANGED = 0x0007;
         private const int DEVICE_NOTIFY_WINDOW_HANDLE = 0x00000000;
+        private const int DEVICE_NOTIFY_ALL_INTERFACE_CLASSES = 0x00000004;
         private const int DBT_DEVTYP_DEVICEINTERFACE = 0x00000005;
 
         [StructLayout(LayoutKind.Sequential)]
@@ -388,14 +389,14 @@ namespace XboxBatteryMonitor
                 {
                     dbcc_size = Marshal.SizeOf(typeof(DEV_BROADCAST_DEVICEINTERFACE)),
                     dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE,
-                    dbcc_classguid = new Guid("4D1E55B2-F16F-11CF-88CB-001111000030") // GUID_DEVINTERFACE_HID
+                    dbcc_classguid = Guid.Empty
                 };
 
                 IntPtr buffer = Marshal.AllocHGlobal(dbi.dbcc_size);
                 try
                 {
                     Marshal.StructureToPtr(dbi, buffer, false);
-                    _notifyHandle = RegisterDeviceNotification(Handle, buffer, DEVICE_NOTIFY_WINDOW_HANDLE);
+                    _notifyHandle = RegisterDeviceNotification(Handle, buffer, DEVICE_NOTIFY_WINDOW_HANDLE | DEVICE_NOTIFY_ALL_INTERFACE_CLASSES);
                 }
                 finally
                 {
@@ -435,10 +436,12 @@ namespace XboxBatteryMonitor
             private readonly NotifyIcon _trayIcon;
             private readonly System.Windows.Forms.Timer _pollTimer;
             private readonly System.Windows.Forms.Timer _debounceTimer;
+            private readonly System.Windows.Forms.Timer _idleCheckTimer;
             private readonly DeviceWatcherWindow _watcher;
             private readonly bool[] _notifiedLow = new bool[4];
             private readonly int?[] _lastPercent = new int?[4];
             private readonly bool[] _isChargingInferred = new bool[4];
+            private int _retryBurstLeft = 0;
             private IntPtr _currentHIcon = IntPtr.Zero;
             private DetailsForm _detailsForm;
 
@@ -469,12 +472,30 @@ namespace XboxBatteryMonitor
                 };
                 _debounceTimer.Tick += (s, e) =>
                 {
-                    _debounceTimer.Stop();
                     UpdateStatus(checkAlerts: true);
+                    if (IsAnyControllerConnected() || --_retryBurstLeft <= 0)
+                    {
+                        _debounceTimer.Stop();
+                    }
+                };
+
+                // Lightweight fallback in case Bluetooth LE wakes without a WM_DEVICECHANGE broadcast
+                _idleCheckTimer = new System.Windows.Forms.Timer
+                {
+                    Interval = 10000
+                };
+                _idleCheckTimer.Tick += (s, e) =>
+                {
+                    if (IsAnyControllerConnected())
+                    {
+                        _idleCheckTimer.Stop();
+                        UpdateStatus(checkAlerts: true);
+                    }
                 };
 
                 _watcher = new DeviceWatcherWindow(() =>
                 {
+                    _retryBurstLeft = 5;
                     _debounceTimer.Stop();
                     _debounceTimer.Start();
                 });
@@ -502,6 +523,7 @@ namespace XboxBatteryMonitor
                     }
 
                     _pollTimer.Stop();
+                    if (!_idleCheckTimer.Enabled) _idleCheckTimer.Start();
                     _trayIcon.Visible = false;
 
                     if (_detailsForm != null && !_detailsForm.IsDisposed && _detailsForm.Visible)
@@ -511,6 +533,7 @@ namespace XboxBatteryMonitor
                     return;
                 }
 
+                _idleCheckTimer.Stop();
                 if (!_pollTimer.Enabled)
                 {
                     _pollTimer.Start();
@@ -767,6 +790,7 @@ namespace XboxBatteryMonitor
             {
                 _pollTimer.Stop();
                 _debounceTimer.Stop();
+                _idleCheckTimer.Stop();
                 _watcher.Dispose();
                 _trayIcon.Visible = false;
                 if (_currentHIcon != IntPtr.Zero)
