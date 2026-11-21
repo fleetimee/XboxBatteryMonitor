@@ -433,6 +433,13 @@ namespace XboxBatteryMonitor
             return null;
         }
 
+        internal static bool IsSteamXboxSupportEnabled(string configVdfContent)
+        {
+            if (string.IsNullOrEmpty(configVdfContent)) return false;
+            return configVdfContent.IndexOf("\"controller_xbox_support\"\t\t\"1\"", StringComparison.OrdinalIgnoreCase) >= 0
+                || configVdfContent.IndexOf("\"controller_xbox_support\" \"1\"", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         internal static bool EvaluateBatteryAlert(int? exactPercent, byte xinputLevel, bool isWired, ref bool notifiedLow)
         {
             if (isWired)
@@ -844,11 +851,11 @@ namespace XboxBatteryMonitor
                     double dt = desktopSw.Elapsed.TotalSeconds;
                     desktopSw.Restart();
 
-                    // Re-check Steam or fullscreen/borderless game every ~0.5s
+                    // Re-check Steam Desktop Layout or fullscreen/borderless game every ~0.5s
                     if (_desktopSteamCheckTicks++ >= 60)
                     {
                         _desktopSteamCheckTicks = 0;
-                        bool shouldPause = IsSteamRunning() || IsFullscreenOrBorderlessAppFocused();
+                        bool shouldPause = IsSteamDesktopLayoutActive() || IsFullscreenOrBorderlessAppFocused();
                         if (shouldPause != _steamPausedDesktop)
                         {
                             _steamPausedDesktop = shouldPause;
@@ -1048,7 +1055,7 @@ namespace XboxBatteryMonitor
                 _desktopModeEnabled = enabled;
                 if (enabled && _wasConnected)
                 {
-                    _steamPausedDesktop = IsSteamRunning() || IsFullscreenOrBorderlessAppFocused();
+                    _steamPausedDesktop = IsSteamDesktopLayoutActive() || IsFullscreenOrBorderlessAppFocused();
                     _desktopSteamCheckTicks = 0;
                     _desktopTimer.Start();
                 }
@@ -1101,6 +1108,27 @@ namespace XboxBatteryMonitor
             private static bool IsSteamRunning()
             {
                 return Process.GetProcessesByName("steam").Length > 0;
+            }
+
+            private static bool IsSteamDesktopLayoutActive()
+            {
+                if (!IsSteamRunning()) return false;
+                try
+                {
+                    object steamPathObj = Microsoft.Win32.Registry.GetValue(
+                        @"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamPath", null);
+                    string steamPath = steamPathObj as string;
+                    if (string.IsNullOrEmpty(steamPath)) return false;
+
+                    string vdfPath = System.IO.Path.Combine(steamPath.Replace('/', '\\'), "config", "config.vdf");
+                    if (!System.IO.File.Exists(vdfPath)) return false;
+
+                    return IsSteamXboxSupportEnabled(System.IO.File.ReadAllText(vdfPath));
+                }
+                catch
+                {
+                    return false;
+                }
             }
 
             private void ShowTestNotification()

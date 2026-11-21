@@ -112,6 +112,14 @@ namespace XboxBatteryMonitor.Tests
                 }
             });
 
+            Run("Steam Xbox support detection parses config.vdf accurately", () =>
+            {
+                AssertFalse(Program.IsSteamXboxSupportEnabled(""), "Empty config should be false");
+                AssertFalse(Program.IsSteamXboxSupportEnabled("\"controller_xbox_support\"\t\t\"0\""), "Disabled should be false");
+                AssertTrue(Program.IsSteamXboxSupportEnabled("\"controller_xbox_support\"\t\t\"1\""), "Enabled with tabs should be true");
+                AssertTrue(Program.IsSteamXboxSupportEnabled("\"controller_xbox_support\" \"1\""), "Enabled with space should be true");
+            });
+
             Console.WriteLine();
             Console.WriteLine(string.Format("Tests passed: {0}, failed: {1}", _passed, _failed));
             return _failed == 0 ? 0 : 1;
