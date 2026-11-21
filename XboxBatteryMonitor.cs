@@ -142,6 +142,57 @@ namespace XboxBatteryMonitor
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+        private const int INPUT_MOUSE = 0;
+        private const int INPUT_KEYBOARD = 1;
+        private const uint MOUSEEVENTF_MOVE = 0x0001;
+        private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+        private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+        private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+        private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+        private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
+        private const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
+        private const uint MOUSEEVENTF_WHEEL = 0x0800;
+        private const uint MOUSEEVENTF_HWHEEL = 0x1000;
+        private const uint KEYEVENTF_KEYUP = 0x0002;
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct MOUSEINPUT
+        {
+            public int dx;
+            public int dy;
+            public uint mouseData;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct KEYBDINPUT
+        {
+            public ushort wVk;
+            public ushort wScan;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        struct INPUTUNION
+        {
+            [FieldOffset(0)] public MOUSEINPUT mi;
+            [FieldOffset(0)] public KEYBDINPUT ki;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct INPUT
+        {
+            public int type;
+            public INPUTUNION u;
+        }
+
         private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
         private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
         private const int DWMWA_BORDER_COLOR = 34;
@@ -350,16 +401,215 @@ namespace XboxBatteryMonitor
             return null;
         }
 
+        private class DesktopController
+        {
+            // XInput button bitmasks
+            private const ushort DPAD_UP = 0x0001;
+            private const ushort DPAD_DOWN = 0x0002;
+            private const ushort DPAD_LEFT = 0x0004;
+            private const ushort DPAD_RIGHT = 0x0008;
+            private const ushort BTN_START = 0x0010;
+            private const ushort BTN_BACK = 0x0020;
+            private const ushort BTN_LS = 0x0040;
+            private const ushort BTN_RS = 0x0080;
+            private const ushort BTN_LB = 0x0100;
+            private const ushort BTN_RB = 0x0200;
+            private const ushort BTN_A = 0x1000;
+            private const ushort BTN_B = 0x2000;
+            private const ushort BTN_X = 0x4000;
+            private const ushort BTN_Y = 0x8000;
+
+            private const int STICK_DEADZONE = 7849;
+            private const int TRIGGER_THRESHOLD = 40;
+
+            private bool _prevLeftClick = false;
+            private bool _prevRightClick = false;
+            private bool _prevMiddleClick = false;
+            private ushort _prevButtons = 0;
+            private double _scrollAccumY = 0;
+            private double _scrollAccumX = 0;
+
+            public void Reset()
+            {
+                if (_prevLeftClick) SendMouseButton(MOUSEEVENTF_LEFTUP);
+                if (_prevRightClick) SendMouseButton(MOUSEEVENTF_RIGHTUP);
+                if (_prevMiddleClick) SendMouseButton(MOUSEEVENTF_MIDDLEUP);
+                ReleaseHeldArrows();
+                _prevLeftClick = false;
+                _prevRightClick = false;
+                _prevMiddleClick = false;
+                _prevButtons = 0;
+                _scrollAccumY = 0;
+                _scrollAccumX = 0;
+            }
+
+            public void Tick()
+            {
+                XINPUT_STATE state = new XINPUT_STATE();
+                if (XInputGetState(0, ref state) != ERROR_SUCCESS)
+                {
+                    Reset();
+                    return;
+                }
+
+                var gp = state.Gamepad;
+
+                // 1. Left Stick -> Mouse Cursor (Steam-style radial deadzone + quadratic curve)
+                MoveCursorFromStick(gp.sThumbLX, gp.sThumbLY);
+
+                // 2. Right Stick -> Mouse Scroll Wheel
+                ScrollFromStick(gp.sThumbRX, gp.sThumbRY);
+
+                // 3. A or RT -> Left Mouse Click (holdable)
+                bool leftDown = ((gp.wButtons & BTN_A) != 0) || (gp.bRightTrigger > TRIGGER_THRESHOLD);
+                if (leftDown != _prevLeftClick)
+                {
+                    SendMouseButton(leftDown ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP);
+                    _prevLeftClick = leftDown;
+                }
+
+                // 4. B or LT -> Right Mouse Click (holdable)
+                bool rightDown = ((gp.wButtons & BTN_B) != 0) || (gp.bLeftTrigger > TRIGGER_THRESHOLD);
+                if (rightDown != _prevRightClick)
+                {
+                    SendMouseButton(rightDown ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP);
+                    _prevRightClick = rightDown;
+                }
+
+                // 5. L3 (Left Stick Click) -> Middle Mouse Click
+                bool midDown = (gp.wButtons & BTN_LS) != 0;
+                if (midDown != _prevMiddleClick)
+                {
+                    SendMouseButton(midDown ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP);
+                    _prevMiddleClick = midDown;
+                }
+
+                // 6. D-Pad -> Arrow Keys
+                SyncKey(gp.wButtons, DPAD_UP, 0x26);    // VK_UP
+                SyncKey(gp.wButtons, DPAD_DOWN, 0x28);  // VK_DOWN
+                SyncKey(gp.wButtons, DPAD_LEFT, 0x25);  // VK_LEFT
+                SyncKey(gp.wButtons, DPAD_RIGHT, 0x27); // VK_RIGHT
+
+                // 7. Edge-triggered Steam Desktop shortcuts
+                ushort pressed = (ushort)(gp.wButtons & ~_prevButtons);
+                if ((pressed & BTN_X) != 0) SendKeyCombo(0x5B, 0x11, 0x4F); // Win + Ctrl + O (On-Screen Keyboard)
+                if ((pressed & BTN_Y) != 0) SendKeyTap(0x20);              // Space
+                if ((pressed & BTN_START) != 0) SendKeyTap(0x1B);          // Escape
+                if ((pressed & BTN_RS) != 0) SendKeyTap(0x0D);             // Enter
+                if ((pressed & BTN_BACK) != 0) SendKeyCombo(0x12, 0x09);   // Alt + Tab
+                if ((pressed & BTN_LB) != 0) SendKeyTap(0xA6);             // VK_BROWSER_BACK
+                if ((pressed & BTN_RB) != 0) SendKeyTap(0xA7);             // VK_BROWSER_FORWARD
+
+                _prevButtons = gp.wButtons;
+            }
+
+            private void ReleaseHeldArrows()
+            {
+                if ((_prevButtons & DPAD_UP) != 0) SendKey(0x26, true);
+                if ((_prevButtons & DPAD_DOWN) != 0) SendKey(0x28, true);
+                if ((_prevButtons & DPAD_LEFT) != 0) SendKey(0x25, true);
+                if ((_prevButtons & DPAD_RIGHT) != 0) SendKey(0x27, true);
+            }
+
+            private void SyncKey(ushort buttons, ushort mask, ushort vk)
+            {
+                bool now = (buttons & mask) != 0;
+                bool prev = (_prevButtons & mask) != 0;
+                if (now != prev) SendKey(vk, !now);
+            }
+
+            private static void MoveCursorFromStick(short rawX, short rawY)
+            {
+                double mag = Math.Sqrt((double)rawX * rawX + (double)rawY * rawY);
+                if (mag <= STICK_DEADZONE) return;
+
+                double normMag = Math.Min(1.0, (mag - STICK_DEADZONE) / (32767.0 - STICK_DEADZONE));
+                double speed = normMag * normMag * 18.0; // smooth quadratic curve
+                int dx = (int)Math.Round((rawX / mag) * speed);
+                int dy = (int)Math.Round((-rawY / mag) * speed); // invert Y for screen coords
+                if (dx == 0 && dy == 0) return;
+
+                INPUT[] inp = new INPUT[1];
+                inp[0].type = INPUT_MOUSE;
+                inp[0].u.mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = MOUSEEVENTF_MOVE };
+                SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+            }
+
+            private void ScrollFromStick(short rawX, short rawY)
+            {
+                if (Math.Abs(rawY) > STICK_DEADZONE)
+                {
+                    double normY = (Math.Abs(rawY) - STICK_DEADZONE) / (32767.0 - STICK_DEADZONE);
+                    _scrollAccumY += Math.Sign(rawY) * normY * 36.0;
+                    int delta = (int)_scrollAccumY;
+                    if (Math.Abs(delta) >= 20)
+                    {
+                        _scrollAccumY -= delta;
+                        INPUT[] inp = new INPUT[1];
+                        inp[0].type = INPUT_MOUSE;
+                        inp[0].u.mi = new MOUSEINPUT { mouseData = unchecked((uint)delta), dwFlags = MOUSEEVENTF_WHEEL };
+                        SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+                    }
+                }
+                if (Math.Abs(rawX) > STICK_DEADZONE)
+                {
+                    double normX = (Math.Abs(rawX) - STICK_DEADZONE) / (32767.0 - STICK_DEADZONE);
+                    _scrollAccumX += Math.Sign(rawX) * normX * 36.0;
+                    int delta = (int)_scrollAccumX;
+                    if (Math.Abs(delta) >= 20)
+                    {
+                        _scrollAccumX -= delta;
+                        INPUT[] inp = new INPUT[1];
+                        inp[0].type = INPUT_MOUSE;
+                        inp[0].u.mi = new MOUSEINPUT { mouseData = unchecked((uint)delta), dwFlags = MOUSEEVENTF_HWHEEL };
+                        SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+                    }
+                }
+            }
+
+            private static void SendMouseButton(uint flag)
+            {
+                INPUT[] inp = new INPUT[1];
+                inp[0].type = INPUT_MOUSE;
+                inp[0].u.mi = new MOUSEINPUT { dwFlags = flag };
+                SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+            }
+
+            private static void SendKey(ushort vk, bool keyUp)
+            {
+                INPUT[] inp = new INPUT[1];
+                inp[0].type = INPUT_KEYBOARD;
+                inp[0].u.ki = new KEYBDINPUT { wVk = vk, dwFlags = keyUp ? KEYEVENTF_KEYUP : 0 };
+                SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+            }
+
+            private static void SendKeyTap(ushort vk)
+            {
+                SendKey(vk, false);
+                SendKey(vk, true);
+            }
+
+            private static void SendKeyCombo(params ushort[] vks)
+            {
+                for (int i = 0; i < vks.Length; i++) SendKey(vks[i], false);
+                for (int i = vks.Length - 1; i >= 0; i--) SendKey(vks[i], true);
+            }
+        }
+
         private class MonitorContext : ApplicationContext
         {
             private readonly NotifyIcon _trayIcon;
             private readonly System.Windows.Forms.Timer _pollTimer;
             private readonly System.Windows.Forms.Timer _idleCheckTimer;
             private readonly System.Windows.Forms.Timer _hideTimer;
+            private readonly System.Windows.Forms.Timer _desktopTimer;
+            private readonly DesktopController _desktopController = new DesktopController();
+            private readonly ToolStripMenuItem _desktopMenuItem;
             private readonly bool[] _notifiedLow = new bool[4];
             private readonly int?[] _lastPercent = new int?[4];
             private readonly bool[] _isChargingInferred = new bool[4];
             private bool _wasConnected = false;
+            private bool _desktopModeEnabled = false;
             private int _connectedTicks = 0;
             private IntPtr _currentHIcon = IntPtr.Zero;
             private DetailsForm _detailsForm;
@@ -368,6 +618,10 @@ namespace XboxBatteryMonitor
             {
                 ContextMenuStrip menu = new ContextMenuStrip();
                 menu.Items.Add("Show Controller Details", null, (s, e) => ShowDetails());
+                _desktopMenuItem = new ToolStripMenuItem("Desktop Control (Steam Layout)");
+                _desktopMenuItem.CheckOnClick = true;
+                _desktopMenuItem.Click += (s, e) => ToggleDesktopMode(_desktopMenuItem.Checked);
+                menu.Items.Add(_desktopMenuItem);
                 menu.Items.Add("Test Notification", null, (s, e) => ShowTestNotification());
                 menu.Items.Add(new ToolStripSeparator());
                 menu.Items.Add("Exit", null, (s, e) => ExitApplication());
@@ -379,6 +633,12 @@ namespace XboxBatteryMonitor
                     ContextMenuStrip = menu
                 };
                 _trayIcon.DoubleClick += (s, e) => ShowDetails();
+
+                _desktopTimer = new System.Windows.Forms.Timer
+                {
+                    Interval = 16 // ~60 Hz mouse/input polling only when Desktop Control is enabled
+                };
+                _desktopTimer.Tick += (s, e) => _desktopController.Tick();
 
                 _hideTimer = new System.Windows.Forms.Timer
                 {
@@ -451,6 +711,8 @@ namespace XboxBatteryMonitor
                     }
 
                     _pollTimer.Stop();
+                    _desktopTimer.Stop();
+                    _desktopController.Reset();
                     _connectedTicks = 0;
                     if (!_idleCheckTimer.Enabled) _idleCheckTimer.Start();
 
@@ -488,6 +750,10 @@ namespace XboxBatteryMonitor
                 if (!_pollTimer.Enabled)
                 {
                     _pollTimer.Start();
+                }
+                if (_desktopModeEnabled && !_desktopTimer.Enabled)
+                {
+                    _desktopTimer.Start();
                 }
                 foreach (var c in controllers)
                 {
@@ -573,6 +839,20 @@ namespace XboxBatteryMonitor
                     {
                         _notifiedLow[idx] = false;
                     }
+                }
+            }
+
+            private void ToggleDesktopMode(bool enabled)
+            {
+                _desktopModeEnabled = enabled;
+                if (enabled && _wasConnected)
+                {
+                    _desktopTimer.Start();
+                }
+                else
+                {
+                    _desktopTimer.Stop();
+                    _desktopController.Reset();
                 }
             }
 
@@ -752,6 +1032,8 @@ namespace XboxBatteryMonitor
                 _pollTimer.Stop();
                 _idleCheckTimer.Stop();
                 _hideTimer.Stop();
+                _desktopTimer.Stop();
+                _desktopController.Reset();
                 _trayIcon.Visible = false;
                 if (_currentHIcon != IntPtr.Zero)
                 {
