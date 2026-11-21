@@ -951,10 +951,11 @@ namespace XboxBatteryMonitor
 
                 if (c.IsWired)
                 {
-                    _lblBatteryValue.Text = "USB Powered (Wired)";
+                    _lblBatteryValue.Text = "Charging / USB Powered";
                     _lblBatteryValue.ForeColor = Color.FromArgb(125, 211, 252);
                     _progressBar.FillColor = Color.FromArgb(125, 211, 252);
                     _progressBar.Value = 100;
+                    _lblBatterySub.Text = string.Format("Status: Plugged In (USB)  •  {0}", c.BatteryTypeLabel);
                 }
                 else if (c.ExactPercent.HasValue)
                 {
@@ -962,10 +963,11 @@ namespace XboxBatteryMonitor
                     Color cColor = pct <= LOW_THRESHOLD_PERCENT
                         ? Color.FromArgb(248, 113, 113)
                         : pct <= 40 ? Color.FromArgb(252, 211, 77) : Color.FromArgb(134, 239, 172);
-                    _lblBatteryValue.Text = string.Format("Battery: {0}%", pct);
+                    _lblBatteryValue.Text = string.Format("Battery: {0}%  (Not Charging)", pct);
                     _lblBatteryValue.ForeColor = cColor;
                     _progressBar.FillColor = cColor;
                     _progressBar.Value = pct;
+                    _lblBatterySub.Text = string.Format("{0}  •  Alert at ≤ {1}%", c.BatteryTypeLabel, LOW_THRESHOLD_PERCENT);
                 }
                 else
                 {
@@ -974,13 +976,12 @@ namespace XboxBatteryMonitor
                                : c.XInputLevel == BATTERY_LEVEL_LOW ? 15 : 5;
                     Color cColor = c.XInputLevel <= BATTERY_LEVEL_LOW
                         ? Color.FromArgb(248, 113, 113) : Color.FromArgb(134, 239, 172);
-                    _lblBatteryValue.Text = string.Format("Battery: {0}", LevelText(c.XInputLevel));
+                    _lblBatteryValue.Text = string.Format("Battery: {0}  (Not Charging)", LevelText(c.XInputLevel));
                     _lblBatteryValue.ForeColor = cColor;
                     _progressBar.FillColor = cColor;
                     _progressBar.Value = approx;
+                    _lblBatterySub.Text = string.Format("{0}  •  Alert at ≤ {1}%", c.BatteryTypeLabel, LOW_THRESHOLD_PERCENT);
                 }
-
-                _lblBatterySub.Text = string.Format("{0}  •  Alert at ≤ {1}%", c.BatteryTypeLabel, LOW_THRESHOLD_PERCENT);
             }
         }
     }
