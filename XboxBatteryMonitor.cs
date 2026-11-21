@@ -61,6 +61,13 @@ namespace XboxBatteryMonitor
         }
 
         [StructLayout(LayoutKind.Sequential)]
+        struct XINPUT_VIBRATION
+        {
+            public ushort wLeftMotorSpeed;
+            public ushort wRightMotorSpeed;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         struct SP_DEVINFO_DATA
         {
             public uint cbSize;
@@ -93,6 +100,9 @@ namespace XboxBatteryMonitor
 
         [DllImport("xinput1_4.dll")]
         private static extern int XInputGetBatteryInformation(int dwUserIndex, byte devType, ref XINPUT_BATTERY_INFORMATION pBatteryInformation);
+
+        [DllImport("xinput1_4.dll")]
+        private static extern int XInputSetState(int dwUserIndex, ref XINPUT_VIBRATION pVibration);
 
         [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr SetupDiGetClassDevs(IntPtr ClassGuid, string Enumerator, IntPtr hwndParent, int Flags);
@@ -178,6 +188,7 @@ namespace XboxBatteryMonitor
         private const uint MOUSEEVENTF_WHEEL = 0x0800;
         private const uint MOUSEEVENTF_HWHEEL = 0x1000;
         private const uint KEYEVENTF_KEYUP = 0x0002;
+        private const uint KEYEVENTF_UNICODE = 0x0004;
 
         [StructLayout(LayoutKind.Sequential)]
         struct MOUSEINPUT
@@ -500,6 +511,7 @@ namespace XboxBatteryMonitor
             private const int STICK_DEADZONE = 7849;
             private const int TRIGGER_THRESHOLD = 40;
 
+            private readonly OsdKeyboardForm _osdKeyboard;
             private bool _prevLeftClick = false;
             private bool _prevRightClick = false;
             private bool _prevMiddleClick = false;
@@ -508,6 +520,28 @@ namespace XboxBatteryMonitor
             private double _scrollAccumX = 0;
             private double _cursorAccumX = 0;
             private double _cursorAccumY = 0;
+            private long _lastNavTickMs = 0;
+
+            public DesktopController(OsdKeyboardForm osdKeyboard = null)
+            {
+                _osdKeyboard = osdKeyboard;
+            }
+
+            public static void PulseVibration(ushort leftMotor, ushort rightMotor, int durationMs)
+            {
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    try
+                    {
+                        XINPUT_VIBRATION vib = new XINPUT_VIBRATION { wLeftMotorSpeed = leftMotor, wRightMotorSpeed = rightMotor };
+                        XInputSetState(0, ref vib);
+                        Thread.Sleep(durationMs);
+                        XINPUT_VIBRATION stop = new XINPUT_VIBRATION { wLeftMotorSpeed = 0, wRightMotorSpeed = 0 };
+                        XInputSetState(0, ref stop);
+                    }
+                    catch { }
+                });
+            }
 
             public void Reset()
             {
@@ -535,6 +569,49 @@ namespace XboxBatteryMonitor
                 }
 
                 var gp = state.Gamepad;
+                ushort pressed = (ushort)(gp.wButtons & ~_prevButtons);
+
+                // Toggle compact OSD Keyboard on X
+                if ((pressed & BTN_X) != 0 && _osdKeyboard != null)
+                {
+                    _osdKeyboard.ToggleFromController();
+                    _prevButtons = gp.wButtons;
+                    return;
+                }
+
+                // If OSD Keyboard is open, route D-Pad / Stick / A / B / LB / RB / Y to it
+                if (_osdKeyboard != null && _osdKeyboard.Visible)
+                {
+                    long nowMs = Environment.TickCount;
+                    int navDx = 0, navDy = 0;
+                    if ((pressed & DPAD_LEFT) != 0) navDx = -1;
+                    else if ((pressed & DPAD_RIGHT) != 0) navDx = 1;
+                    else if ((pressed & DPAD_UP) != 0) navDy = -1;
+                    else if ((pressed & DPAD_DOWN) != 0) navDy = 1;
+                    else if (nowMs - _lastNavTickMs > 170)
+                    {
+                        if (gp.sThumbLX < -16000) navDx = -1;
+                        else if (gp.sThumbLX > 16000) navDx = 1;
+                        else if (gp.sThumbLY > 16000) navDy = -1;
+                        else if (gp.sThumbLY < -16000) navDy = 1;
+                    }
+
+                    if (navDx != 0 || navDy != 0)
+                    {
+                        _lastNavTickMs = nowMs;
+                        _osdKeyboard.MoveSelection(navDx, navDy);
+                        PulseVibration(0, 9000, 20);
+                    }
+
+                    if ((pressed & BTN_A) != 0) _osdKeyboard.ActivateSelected();
+                    if ((pressed & BTN_LB) != 0) { SendKeyTap(0x08); PulseVibration(10000, 18000, 40); } // Backspace
+                    if ((pressed & BTN_Y) != 0) { SendKeyTap(0x20); PulseVibration(10000, 18000, 40); }  // Space
+                    if ((pressed & BTN_RB) != 0) { SendKeyTap(0x0D); PulseVibration(12000, 22000, 45); } // Enter
+                    if ((pressed & BTN_START) != 0 || (pressed & BTN_B) != 0) _osdKeyboard.HideKeyboard();
+
+                    _prevButtons = gp.wButtons;
+                    return;
+                }
 
                 // 1. Left Stick -> Mouse Cursor (sub-pixel accumulation + delta-time)
                 MoveCursorFromStick(gp.sThumbLX, gp.sThumbLY, dtSeconds);
@@ -573,8 +650,6 @@ namespace XboxBatteryMonitor
                 SyncKey(gp.wButtons, DPAD_RIGHT, 0x27); // VK_RIGHT
 
                 // 7. Edge-triggered Steam Desktop shortcuts
-                ushort pressed = (ushort)(gp.wButtons & ~_prevButtons);
-                if ((pressed & BTN_X) != 0) SendKeyCombo(0x5B, 0x11, 0x4F); // Win + Ctrl + O (On-Screen Keyboard)
                 if ((pressed & BTN_Y) != 0) SendKeyTap(0x20);              // Space
                 if ((pressed & BTN_START) != 0) SendKeyTap(0x1B);          // Escape
                 if ((pressed & BTN_RS) != 0) SendKeyTap(0x0D);             // Enter
@@ -689,10 +764,20 @@ namespace XboxBatteryMonitor
                 SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
             }
 
-            private static void SendKeyTap(ushort vk)
+            internal static void SendKeyTap(ushort vk)
             {
                 SendKey(vk, false);
                 SendKey(vk, true);
+            }
+
+            internal static void SendUnicodeChar(char ch)
+            {
+                INPUT[] inp = new INPUT[2];
+                inp[0].type = INPUT_KEYBOARD;
+                inp[0].u.ki = new KEYBDINPUT { wScan = ch, dwFlags = KEYEVENTF_UNICODE };
+                inp[1].type = INPUT_KEYBOARD;
+                inp[1].u.ki = new KEYBDINPUT { wScan = ch, dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP };
+                SendInput(2, inp, Marshal.SizeOf(typeof(INPUT)));
             }
 
             private static void SendKeyCombo(params ushort[] vks)
@@ -709,7 +794,8 @@ namespace XboxBatteryMonitor
             private readonly System.Windows.Forms.Timer _idleCheckTimer;
             private readonly System.Windows.Forms.Timer _hideTimer;
             private readonly System.Windows.Forms.Timer _desktopTimer;
-            private readonly DesktopController _desktopController = new DesktopController();
+            private readonly OsdKeyboardForm _osdKeyboard;
+            private readonly DesktopController _desktopController;
             private readonly ToolStripMenuItem _desktopMenuItem;
             private readonly bool[] _notifiedLow = new bool[4];
             private readonly int?[] _lastPercent = new int?[4];
@@ -725,12 +811,16 @@ namespace XboxBatteryMonitor
 
             public MonitorContext(bool testMode)
             {
+                _osdKeyboard = new OsdKeyboardForm();
+                _desktopController = new DesktopController(_osdKeyboard);
+
                 ContextMenuStrip menu = new ContextMenuStrip();
                 menu.Items.Add("Show Controller Details", null, (s, e) => ShowDetails());
                 _desktopMenuItem = new ToolStripMenuItem("Desktop Control (Steam Layout)");
                 _desktopMenuItem.CheckOnClick = true;
                 _desktopMenuItem.Click += (s, e) => ToggleDesktopMode(_desktopMenuItem.Checked);
                 menu.Items.Add(_desktopMenuItem);
+                menu.Items.Add("On-Screen Keyboard...", null, (s, e) => _osdKeyboard.ShowKeyboard());
                 menu.Items.Add("View Desktop Layout...", null, (s, e) => ShowLayoutMap());
                 menu.Items.Add("Test Notification", null, (s, e) => ShowTestNotification());
                 menu.Items.Add(new ToolStripSeparator());
@@ -1803,6 +1893,219 @@ namespace XboxBatteryMonitor
                 {
                     g.DrawString(btnName, fKey, bKey, rect.X + 8, rect.Y + 4);
                     g.DrawString(action, fVal, bVal, rect.X + 8, rect.Y + 17);
+                }
+            }
+        }
+
+        internal class OsdKeyboardForm : Form
+        {
+            private readonly string[][] _alphaRows = new string[][]
+            {
+                new[] { "q","w","e","r","t","y","u","i","o","p","⌫" },
+                new[] { "a","s","d","f","g","h","j","k","l","'" },
+                new[] { "⇧","z","x","c","v","b","n","m",",","." },
+                new[] { "123","Space","↵","✕" }
+            };
+
+            private readonly string[][] _symRows = new string[][]
+            {
+                new[] { "1","2","3","4","5","6","7","8","9","0","⌫" },
+                new[] { "@","#","$","%","&","*","-","+","=","/" },
+                new[] { "⇧","!","?",":",";","(",")","_","\"","\\" },
+                new[] { "ABC","Space","↵","✕" }
+            };
+
+            private bool _shift = false;
+            private bool _symbols = false;
+            private int _selRow = 1;
+            private int _selCol = 0;
+            private readonly RectangleF[][] _keyRects = new RectangleF[4][];
+
+            protected override bool ShowWithoutActivation { get { return true; } }
+
+            protected override CreateParams CreateParams
+            {
+                get
+                {
+                    CreateParams cp = base.CreateParams;
+                    cp.ExStyle |= 0x08000000; // WS_EX_NOACTIVATE (never steals focus from target app)
+                    cp.ExStyle |= 0x00000008; // WS_EX_TOPMOST
+                    return cp;
+                }
+            }
+
+            public OsdKeyboardForm()
+            {
+                FormBorderStyle = FormBorderStyle.None;
+                ShowInTaskbar = false;
+                TopMost = true;
+                AutoScaleMode = AutoScaleMode.Dpi;
+                StartPosition = FormStartPosition.Manual;
+                ClientSize = new Size(540, 206);
+                BackColor = Color.FromArgb(26, 26, 30);
+                DoubleBuffered = true;
+
+                Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+                Location = new Point(wa.Left + (wa.Width - Width) / 2, wa.Bottom - Height - 18);
+
+                MouseDown += (s, e) =>
+                {
+                    if (e.Button != MouseButtons.Left) return;
+                    var rows = CurrentRows();
+                    for (int r = 0; r < rows.Length; r++)
+                    {
+                        for (int c = 0; c < rows[r].Length; c++)
+                        {
+                            if (_keyRects[r] != null && c < _keyRects[r].Length && _keyRects[r][c].Contains(e.Location))
+                            {
+                                _selRow = r;
+                                _selCol = c;
+                                Invalidate();
+                                PressKey(rows[r][c]);
+                                return;
+                            }
+                        }
+                    }
+                };
+            }
+
+            protected override void OnHandleCreated(EventArgs e)
+            {
+                base.OnHandleCreated(e);
+                try
+                {
+                    int dark = 1;
+                    DwmSetWindowAttribute(Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+                    int round = DWMWCP_ROUND;
+                    DwmSetWindowAttribute(Handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref round, sizeof(int));
+                    int borderColor = 0x004A4A52;
+                    DwmSetWindowAttribute(Handle, DWMWA_BORDER_COLOR, ref borderColor, sizeof(int));
+                }
+                catch { }
+            }
+
+            public void ToggleFromController()
+            {
+                if (Visible) HideKeyboard();
+                else ShowKeyboard();
+                DesktopController.PulseVibration(0, 14000, 30);
+            }
+
+            public void ShowKeyboard()
+            {
+                if (!Visible) Show();
+                Invalidate();
+            }
+
+            public void HideKeyboard()
+            {
+                if (Visible) Hide();
+            }
+
+            public void MoveSelection(int dx, int dy)
+            {
+                var rows = CurrentRows();
+                _selRow = (_selRow + dy + rows.Length) % rows.Length;
+                int cols = rows[_selRow].Length;
+                _selCol = Math.Max(0, Math.Min(cols - 1, _selCol + dx));
+                if (dx != 0 && _selCol == 0 && dx < 0) _selCol = cols - 1;
+                Invalidate();
+            }
+
+            public void ActivateSelected()
+            {
+                var rows = CurrentRows();
+                if (_selRow >= 0 && _selRow < rows.Length && _selCol >= 0 && _selCol < rows[_selRow].Length)
+                {
+                    PressKey(rows[_selRow][_selCol]);
+                }
+            }
+
+            private string[][] CurrentRows() { return _symbols ? _symRows : _alphaRows; }
+
+            private void PressKey(string key)
+            {
+                DesktopController.PulseVibration(14000, 24000, 45);
+
+                if (key == "⌫") { DesktopController.SendKeyTap(0x08); return; }
+                if (key == "↵") { DesktopController.SendKeyTap(0x0D); return; }
+                if (key == "Space") { DesktopController.SendKeyTap(0x20); return; }
+                if (key == "✕") { HideKeyboard(); return; }
+                if (key == "⇧") { _shift = !_shift; Invalidate(); return; }
+                if (key == "123" || key == "ABC") { _symbols = !_symbols; _selCol = 0; Invalidate(); return; }
+
+                string outStr = (_shift && !_symbols) ? key.ToUpperInvariant() : key;
+                DesktopController.SendUnicodeChar(outStr[0]);
+                if (_shift) { _shift = false; Invalidate(); }
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                Graphics g = e.Graphics;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+
+                var rows = CurrentRows();
+                float pad = 10f;
+                float gap = 5f;
+                float y = 10f;
+                float keyH = 38f;
+
+                using (Font keyFont = new Font("Segoe UI Variable Text", 10.5f, FontStyle.Bold))
+                using (Font hintFont = new Font("Segoe UI Variable Text", 7.8f))
+                using (SolidBrush hintBrush = new SolidBrush(Color.FromArgb(145, 145, 155)))
+                {
+                    for (int r = 0; r < rows.Length; r++)
+                    {
+                        string[] row = rows[r];
+                        _keyRects[r] = new RectangleF[row.Length];
+                        float totalW = ClientSize.Width - pad * 2 - gap * (row.Length - 1);
+
+                        // Compute relative weights (Space is wider)
+                        float totalWeight = 0;
+                        float[] weights = new float[row.Length];
+                        for (int c = 0; c < row.Length; c++)
+                        {
+                            weights[c] = row[c] == "Space" ? 4.5f : (row[c] == "↵" || row[c] == "123" || row[c] == "ABC") ? 1.5f : 1f;
+                            totalWeight += weights[c];
+                        }
+
+                        float x = pad;
+                        for (int c = 0; c < row.Length; c++)
+                        {
+                            float w = totalW * (weights[c] / totalWeight);
+                            RectangleF rect = new RectangleF(x, y, w, keyH);
+                            _keyRects[r][c] = rect;
+
+                            bool selected = (r == _selRow && c == _selCol);
+                            bool activeMod = (row[c] == "⇧" && _shift);
+                            Color bg = selected ? Color.FromArgb(0, 120, 212)
+                                     : activeMod ? Color.FromArgb(72, 95, 130)
+                                     : Color.FromArgb(46, 46, 52);
+                            Color border = selected ? Color.FromArgb(125, 211, 252) : Color.FromArgb(68, 68, 76);
+
+                            using (GraphicsPath p = MonitorContext.CreateRoundedRect(rect, 6f))
+                            using (SolidBrush b = new SolidBrush(bg))
+                            using (Pen pen = new Pen(border, selected ? 1.5f : 1f))
+                            {
+                                g.FillPath(b, p);
+                                g.DrawPath(pen, p);
+                            }
+
+                            string label = (_shift && !_symbols && row[c].Length == 1) ? row[c].ToUpperInvariant() : row[c];
+                            TextRenderer.DrawText(
+                                g,
+                                label,
+                                keyFont,
+                                Rectangle.Round(rect),
+                                Color.White,
+                                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
+                            x += w + gap;
+                        }
+                        y += keyH + gap;
+                    }
+
+                    g.DrawString("A: Press   •   Y: Space   •   LB: Backspace   •   RB: Enter   •   B / X: Close", hintFont, hintBrush, 12f, ClientSize.Height - 20f);
                 }
             }
         }
