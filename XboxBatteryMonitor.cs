@@ -132,6 +132,14 @@ namespace XboxBatteryMonitor
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool DestroyIcon(IntPtr hIcon);
 
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+        private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+        private const int DWMWA_BORDER_COLOR = 34;
+        private const int DWMWCP_ROUND = 2;
+
         [STAThread]
         static void Main(string[] args)
         {
@@ -603,7 +611,7 @@ namespace XboxBatteryMonitor
                 }
             }
 
-            private static GraphicsPath CreateRoundedRect(RectangleF bounds, float radius)
+            internal static GraphicsPath CreateRoundedRect(RectangleF bounds, float radius)
             {
                 GraphicsPath path = new GraphicsPath();
                 float d = radius * 2f;
@@ -654,111 +662,239 @@ namespace XboxBatteryMonitor
             }
         }
 
+        private class FluentCard : Panel
+        {
+            public Color CardColor { get; set; }
+            public Color BorderColor { get; set; }
+            public int CornerRadius { get; set; }
+
+            public FluentCard()
+            {
+                DoubleBuffered = true;
+                CardColor = Color.FromArgb(43, 43, 46);
+                BorderColor = Color.FromArgb(58, 58, 62);
+                CornerRadius = 8;
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                RectangleF rect = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+                using (GraphicsPath path = MonitorContext.CreateRoundedRect(rect, CornerRadius))
+                using (SolidBrush fill = new SolidBrush(CardColor))
+                using (Pen border = new Pen(BorderColor, 1f))
+                {
+                    e.Graphics.FillPath(fill, path);
+                    e.Graphics.DrawPath(border, path);
+                }
+            }
+        }
+
+        private class FluentProgressBar : Control
+        {
+            private int _value = 0;
+            public int Value
+            {
+                get { return _value; }
+                set { _value = Math.Max(0, Math.Min(100, value)); Invalidate(); }
+            }
+            public Color TrackColor { get; set; }
+            public Color FillColor { get; set; }
+
+            public FluentProgressBar()
+            {
+                DoubleBuffered = true;
+                TrackColor = Color.FromArgb(62, 62, 66);
+                FillColor = Color.FromArgb(134, 239, 172);
+                Height = 8;
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                float r = Height / 2f;
+                RectangleF trackRect = new RectangleF(0, 0, Width - 1, Height - 1);
+                using (GraphicsPath trackPath = MonitorContext.CreateRoundedRect(trackRect, r))
+                using (SolidBrush trackBrush = new SolidBrush(TrackColor))
+                {
+                    e.Graphics.FillPath(trackBrush, trackPath);
+                }
+
+                if (_value > 0)
+                {
+                    float fillW = Math.Max(Height, (Width - 1) * (_value / 100f));
+                    RectangleF fillRect = new RectangleF(0, 0, fillW, Height - 1);
+                    using (GraphicsPath fillPath = MonitorContext.CreateRoundedRect(fillRect, r))
+                    using (SolidBrush fillBrush = new SolidBrush(FillColor))
+                    {
+                        e.Graphics.FillPath(fillBrush, fillPath);
+                    }
+                }
+            }
+        }
+
+        private class FluentButton : Control
+        {
+            private bool _hover = false;
+            private bool _pressed = false;
+            public bool IsPrimary { get; set; }
+
+            public FluentButton()
+            {
+                DoubleBuffered = true;
+                Cursor = Cursors.Hand;
+                Font = new Font("Segoe UI Variable Text", 9f, FontStyle.Regular);
+                Size = new Size(92, 32);
+            }
+
+            protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
+            protected override void OnMouseLeave(EventArgs e) { _hover = false; _pressed = false; Invalidate(); base.OnMouseLeave(e); }
+            protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) { _pressed = true; Invalidate(); } base.OnMouseDown(e); }
+            protected override void OnMouseUp(MouseEventArgs e) { _pressed = false; Invalidate(); base.OnMouseUp(e); }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                Color bg = IsPrimary
+                    ? (_pressed ? Color.FromArgb(0, 90, 158) : _hover ? Color.FromArgb(24, 131, 215) : Color.FromArgb(0, 120, 212))
+                    : (_pressed ? Color.FromArgb(45, 45, 48) : _hover ? Color.FromArgb(62, 62, 66) : Color.FromArgb(52, 52, 56));
+                Color border = IsPrimary ? bg : Color.FromArgb(72, 72, 76);
+
+                RectangleF rect = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+                using (GraphicsPath path = MonitorContext.CreateRoundedRect(rect, 6f))
+                using (SolidBrush fill = new SolidBrush(bg))
+                using (Pen pen = new Pen(border, 1f))
+                {
+                    e.Graphics.FillPath(fill, path);
+                    e.Graphics.DrawPath(pen, path);
+                }
+
+                TextRenderer.DrawText(
+                    e.Graphics,
+                    Text,
+                    Font,
+                    ClientRectangle,
+                    ForeColor,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+        }
+
         private class DetailsForm : Form
         {
             private readonly Func<List<ControllerSnapshot>> _refreshProvider;
             private readonly Action _onTestNotify;
             private readonly Label _lblModel;
             private readonly Label _lblConnection;
-            private readonly Label _lblBatteryText;
-            private readonly Label _lblBatteryType;
-            private readonly ProgressBar _progressBar;
+            private readonly Label _lblBatteryValue;
+            private readonly Label _lblBatterySub;
+            private readonly FluentProgressBar _progressBar;
 
             public DetailsForm(Func<List<ControllerSnapshot>> refreshProvider, Action onTestNotify)
             {
                 _refreshProvider = refreshProvider;
                 _onTestNotify = onTestNotify;
 
-                Text = "Xbox Controller Details";
-                FormBorderStyle = FormBorderStyle.FixedDialog;
+                Text = "Xbox Controller";
+                FormBorderStyle = FormBorderStyle.FixedSingle;
                 MaximizeBox = false;
                 MinimizeBox = false;
                 StartPosition = FormStartPosition.Manual;
-                ClientSize = new Size(340, 220);
-                BackColor = Color.FromArgb(28, 28, 30);
-                ForeColor = Color.White;
-                Font = new Font("Segoe UI", 9.5f);
+                ClientSize = new Size(348, 224);
+                BackColor = Color.FromArgb(32, 32, 34);
+                ForeColor = Color.FromArgb(245, 245, 247);
+                Font = new Font("Segoe UI Variable Text", 9.5f);
 
-                // Position near bottom-right above taskbar
                 Rectangle wa = Screen.PrimaryScreen.WorkingArea;
-                Location = new Point(wa.Right - Width - 16, wa.Bottom - Height - 16);
+                Location = new Point(wa.Right - Width - 14, wa.Bottom - Height - 14);
+
+                FluentCard headerCard = new FluentCard
+                {
+                    Location = new Point(14, 14),
+                    Size = new Size(320, 62)
+                };
 
                 _lblModel = new Label
                 {
-                    Location = new Point(16, 14),
-                    Size = new Size(308, 24),
-                    Font = new Font("Segoe UI", 11f, FontStyle.Bold),
-                    ForeColor = Color.White
+                    Location = new Point(14, 10),
+                    Size = new Size(292, 24),
+                    Font = new Font("Segoe UI Variable Display", 11f, FontStyle.Bold),
+                    ForeColor = Color.White,
+                    BackColor = Color.Transparent
                 };
 
                 _lblConnection = new Label
                 {
-                    Location = new Point(16, 42),
-                    Size = new Size(308, 20),
-                    ForeColor = Color.FromArgb(180, 180, 185)
+                    Location = new Point(14, 34),
+                    Size = new Size(292, 18),
+                    Font = new Font("Segoe UI Variable Text", 8.75f),
+                    ForeColor = Color.FromArgb(170, 170, 178),
+                    BackColor = Color.Transparent
                 };
+                headerCard.Controls.Add(_lblModel);
+                headerCard.Controls.Add(_lblConnection);
 
-                _lblBatteryText = new Label
+                FluentCard batteryCard = new FluentCard
                 {
-                    Location = new Point(16, 74),
-                    Size = new Size(308, 22),
-                    Font = new Font("Segoe UI", 10f, FontStyle.Bold),
-                    ForeColor = Color.FromArgb(74, 222, 128)
+                    Location = new Point(14, 86),
+                    Size = new Size(320, 82)
                 };
 
-                _progressBar = new ProgressBar
+                _lblBatteryValue = new Label
                 {
-                    Location = new Point(16, 100),
-                    Size = new Size(308, 18),
-                    Minimum = 0,
-                    Maximum = 100,
-                    Style = ProgressBarStyle.Continuous
+                    Location = new Point(14, 10),
+                    Size = new Size(292, 22),
+                    Font = new Font("Segoe UI Variable Display", 10.5f, FontStyle.Bold),
+                    ForeColor = Color.FromArgb(134, 239, 172),
+                    BackColor = Color.Transparent
                 };
 
-                _lblBatteryType = new Label
+                _progressBar = new FluentProgressBar
                 {
-                    Location = new Point(16, 126),
-                    Size = new Size(308, 38),
-                    ForeColor = Color.FromArgb(180, 180, 185)
+                    Location = new Point(14, 38),
+                    Size = new Size(292, 8)
                 };
 
-                Button btnRefresh = new Button
+                _lblBatterySub = new Label
+                {
+                    Location = new Point(14, 54),
+                    Size = new Size(292, 18),
+                    Font = new Font("Segoe UI Variable Text", 8.5f),
+                    ForeColor = Color.FromArgb(170, 170, 178),
+                    BackColor = Color.Transparent
+                };
+                batteryCard.Controls.Add(_lblBatteryValue);
+                batteryCard.Controls.Add(_progressBar);
+                batteryCard.Controls.Add(_lblBatterySub);
+
+                FluentButton btnRefresh = new FluentButton
                 {
                     Text = "Refresh",
-                    Location = new Point(16, 174),
-                    Size = new Size(90, 30),
-                    FlatStyle = FlatStyle.Flat,
-                    BackColor = Color.FromArgb(50, 50, 55),
+                    Location = new Point(14, 180),
+                    Size = new Size(92, 32),
                     ForeColor = Color.White
                 };
-                btnRefresh.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 88);
                 btnRefresh.Click += (s, e) => UpdateData(_refreshProvider());
 
-                Button btnTest = new Button
+                FluentButton btnTest = new FluentButton
                 {
                     Text = "Test Alert",
-                    Location = new Point(114, 174),
-                    Size = new Size(96, 30),
-                    FlatStyle = FlatStyle.Flat,
-                    BackColor = Color.FromArgb(50, 50, 55),
+                    Location = new Point(114, 180),
+                    Size = new Size(98, 32),
                     ForeColor = Color.White
                 };
-                btnTest.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 88);
                 btnTest.Click += (s, e) => _onTestNotify();
 
-                Button btnClose = new Button
+                FluentButton btnClose = new FluentButton
                 {
                     Text = "Close",
-                    Location = new Point(234, 174),
-                    Size = new Size(90, 30),
-                    FlatStyle = FlatStyle.Flat,
-                    BackColor = Color.FromArgb(50, 50, 55),
-                    ForeColor = Color.White
+                    Location = new Point(242, 180),
+                    Size = new Size(92, 32),
+                    ForeColor = Color.White,
+                    IsPrimary = true
                 };
-                btnClose.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 88);
                 btnClose.Click += (s, e) => Hide();
 
-                Controls.AddRange(new Control[] { _lblModel, _lblConnection, _lblBatteryText, _progressBar, _lblBatteryType, btnRefresh, btnTest, btnClose });
+                Controls.AddRange(new Control[] { headerCard, batteryCard, btnRefresh, btnTest, btnClose });
 
                 FormClosing += (s, e) =>
                 {
@@ -770,36 +906,54 @@ namespace XboxBatteryMonitor
                 };
             }
 
+            protected override void OnHandleCreated(EventArgs e)
+            {
+                base.OnHandleCreated(e);
+                try
+                {
+                    int dark = 1;
+                    DwmSetWindowAttribute(Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+                    int round = DWMWCP_ROUND;
+                    DwmSetWindowAttribute(Handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref round, sizeof(int));
+                    int borderColor = 0x00424246;
+                    DwmSetWindowAttribute(Handle, DWMWA_BORDER_COLOR, ref borderColor, sizeof(int));
+                }
+                catch { }
+            }
+
             public void UpdateData(List<ControllerSnapshot> controllers)
             {
                 if (controllers == null || controllers.Count == 0)
                 {
                     _lblModel.Text = "No Xbox Controller Connected";
-                    _lblConnection.Text = "Connection: Disconnected";
-                    _lblBatteryText.Text = "Battery: --";
-                    _lblBatteryText.ForeColor = Color.Gray;
+                    _lblConnection.Text = "Disconnected";
+                    _lblBatteryValue.Text = "Battery: --";
+                    _lblBatteryValue.ForeColor = Color.Gray;
                     _progressBar.Value = 0;
-                    _lblBatteryType.Text = "Monitor will auto-exit shortly.";
+                    _lblBatterySub.Text = "Monitor will auto-exit shortly.";
                     return;
                 }
 
                 var c = controllers[0];
                 _lblModel.Text = c.ModelName;
-                _lblConnection.Text = string.Format("Connection: {0}  •  Slot #{1}", c.ConnectionType, c.Slot);
+                _lblConnection.Text = string.Format("{0}  •  Controller #{1}", c.ConnectionType, c.Slot);
 
                 if (c.IsWired)
                 {
-                    _lblBatteryText.Text = "Power: USB Cable (Wired)";
-                    _lblBatteryText.ForeColor = Color.FromArgb(56, 189, 248);
+                    _lblBatteryValue.Text = "USB Powered (Wired)";
+                    _lblBatteryValue.ForeColor = Color.FromArgb(125, 211, 252);
+                    _progressBar.FillColor = Color.FromArgb(125, 211, 252);
                     _progressBar.Value = 100;
                 }
                 else if (c.ExactPercent.HasValue)
                 {
                     int pct = Math.Max(0, Math.Min(100, c.ExactPercent.Value));
-                    _lblBatteryText.Text = string.Format("Battery: {0}%", pct);
-                    _lblBatteryText.ForeColor = pct <= LOW_THRESHOLD_PERCENT
+                    Color cColor = pct <= LOW_THRESHOLD_PERCENT
                         ? Color.FromArgb(248, 113, 113)
-                        : pct <= 40 ? Color.FromArgb(251, 191, 36) : Color.FromArgb(74, 222, 128);
+                        : pct <= 40 ? Color.FromArgb(252, 211, 77) : Color.FromArgb(134, 239, 172);
+                    _lblBatteryValue.Text = string.Format("Battery: {0}%", pct);
+                    _lblBatteryValue.ForeColor = cColor;
+                    _progressBar.FillColor = cColor;
                     _progressBar.Value = pct;
                 }
                 else
@@ -807,13 +961,15 @@ namespace XboxBatteryMonitor
                     int approx = c.XInputLevel == BATTERY_LEVEL_FULL ? 90
                                : c.XInputLevel == BATTERY_LEVEL_MEDIUM ? 55
                                : c.XInputLevel == BATTERY_LEVEL_LOW ? 15 : 5;
-                    _lblBatteryText.Text = string.Format("Battery: {0}", LevelText(c.XInputLevel));
-                    _lblBatteryText.ForeColor = c.XInputLevel <= BATTERY_LEVEL_LOW
-                        ? Color.FromArgb(248, 113, 113) : Color.FromArgb(74, 222, 128);
+                    Color cColor = c.XInputLevel <= BATTERY_LEVEL_LOW
+                        ? Color.FromArgb(248, 113, 113) : Color.FromArgb(134, 239, 172);
+                    _lblBatteryValue.Text = string.Format("Battery: {0}", LevelText(c.XInputLevel));
+                    _lblBatteryValue.ForeColor = cColor;
+                    _progressBar.FillColor = cColor;
                     _progressBar.Value = approx;
                 }
 
-                _lblBatteryType.Text = string.Format("Type: {0}\nLow-battery alert: ≤ {1}%", c.BatteryTypeLabel, LOW_THRESHOLD_PERCENT);
+                _lblBatterySub.Text = string.Format("{0}  •  Alert at ≤ {1}%", c.BatteryTypeLabel, LOW_THRESHOLD_PERCENT);
             }
         }
     }
