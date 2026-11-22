@@ -6,10 +6,10 @@ if (-not (Test-Path $csc)) {
 }
 
 $testExe = Join-Path $env:TEMP 'XboxBatteryMonitor.Tests.exe'
-$srcMain = Join-Path $PSScriptRoot 'XboxBatteryMonitor.cs'
-$srcTest = Join-Path $PSScriptRoot 'XboxBatteryMonitor.Tests.cs'
+$srcFiles = Get-ChildItem -Path (Join-Path $PSScriptRoot 'src') -Recurse -Filter '*.cs' | ForEach-Object { $_.FullName }
+$srcTest = Join-Path $PSScriptRoot 'tests\XboxBatteryMonitor.Tests.cs'
 
-& $csc /nologo /warn:4 /warnaserror /target:exe /main:XboxBatteryMonitor.Tests.TestRunner "/out:$testExe" $srcMain $srcTest
+& $csc /nologo /warn:4 /warnaserror /target:exe /main:XboxBatteryMonitor.Tests.TestRunner "/out:$testExe" $srcFiles $srcTest
 if ($LASTEXITCODE -ne 0) {
     throw "Test compilation failed."
 }
