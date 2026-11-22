@@ -33,6 +33,24 @@ namespace XboxBatteryMonitor.Battery
             return false;
         }
 
+        public static bool? IsPrimaryControllerWired()
+        {
+            NativeMethods.XINPUT_STATE state = new NativeMethods.XINPUT_STATE();
+            for (int i = 0; i < 4; i++)
+            {
+                if (NativeMethods.XInputGetState(i, ref state) == NativeMethods.ERROR_SUCCESS)
+                {
+                    NativeMethods.XINPUT_BATTERY_INFORMATION bat = new NativeMethods.XINPUT_BATTERY_INFORMATION();
+                    if (NativeMethods.XInputGetBatteryInformation(i, NativeMethods.BATTERY_DEVTYPE_GAMEPAD, ref bat) == NativeMethods.ERROR_SUCCESS)
+                    {
+                        return bat.BatteryType == NativeMethods.BATTERY_TYPE_WIRED;
+                    }
+                    return false;
+                }
+            }
+            return null;
+        }
+
         public static List<ControllerSnapshot> GetConnectedControllers()
         {
             var list = new List<ControllerSnapshot>();

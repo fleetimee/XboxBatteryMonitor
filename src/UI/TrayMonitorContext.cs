@@ -27,6 +27,8 @@ namespace XboxBatteryMonitor.UI
         private readonly int?[] _lastPercent = new int?[4];
         private readonly bool[] _isChargingInferred = new bool[4];
         private bool _wasConnected = false;
+        private bool? _lastPrimaryWired = null;
+        private bool _pendingPostConnectRefresh = false;
         private bool _desktopModeEnabled = false;
         private volatile bool _steamPausedDesktop = false;
         private int _connectedTicks = 0;
@@ -78,8 +80,16 @@ namespace XboxBatteryMonitor.UI
             _pollTimer = new System.Windows.Forms.Timer { Interval = 5000 };
             _pollTimer.Tick += (s, e) =>
             {
-                if (!BatteryReader.IsAnyControllerConnected())
+                bool? wiredNow = BatteryReader.IsPrimaryControllerWired();
+                if (!wiredNow.HasValue)
                 {
+                    UpdateStatus(checkAlerts: true);
+                    return;
+                }
+                if (_pendingPostConnectRefresh || (_lastPrimaryWired.HasValue && wiredNow.Value != _lastPrimaryWired.Value))
+                {
+                    _pendingPostConnectRefresh = false;
+                    _connectedTicks = 0;
                     UpdateStatus(checkAlerts: true);
                     return;
                 }
@@ -126,6 +136,8 @@ namespace XboxBatteryMonitor.UI
 
                 _pollTimer.Stop();
                 StopDesktopThread();
+                _lastPrimaryWired = null;
+                _pendingPostConnectRefresh = false;
                 _connectedTicks = 0;
                 if (!_idleCheckTimer.Enabled) _idleCheckTimer.Start();
 
@@ -171,6 +183,13 @@ namespace XboxBatteryMonitor.UI
             }
 
             ControllerSnapshot primary = controllers[0];
+            bool switchedMode = _lastPrimaryWired.HasValue && _lastPrimaryWired.Value != primary.IsWired;
+            _lastPrimaryWired = primary.IsWired;
+            if ((justConnected || switchedMode) && !primary.IsWired)
+            {
+                // BLE GATT battery property often updates a couple seconds after XInput connects
+                _pendingPostConnectRefresh = true;
+            }
             SetTrayIcon(primary.ExactPercent, primary.IsWired, primary.XInputLevel);
             if (!_trayIcon.Visible) _trayIcon.Visible = true;
 
