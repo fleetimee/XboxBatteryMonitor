@@ -442,6 +442,91 @@ namespace XboxBatteryMonitor
             return null;
         }
 
+        internal class AppSettings
+        {
+            private const string RegKey = @"HKEY_CURRENT_USER\Software\XboxBatteryMonitor";
+
+            public int CursorSensitivity = 100;
+            public int ScrollSpeed = 100;
+            public int LowBatteryThreshold = 20;
+            public bool OsdVibration = true;
+            public bool MuteWhenSteamOpen = true;
+
+            public static AppSettings Load()
+            {
+                AppSettings s = new AppSettings();
+                s.CursorSensitivity = ReadInt("CursorSensitivity", 100, 25, 300);
+                s.ScrollSpeed = ReadInt("ScrollSpeed", 100, 25, 300);
+                s.LowBatteryThreshold = ReadInt("LowBatteryThreshold", 20, 10, 30);
+                s.OsdVibration = ReadInt("OsdVibration", 1, 0, 1) == 1;
+                s.MuteWhenSteamOpen = ReadInt("MuteWhenSteamOpen", 1, 0, 1) == 1;
+                return s;
+            }
+
+            public void Save()
+            {
+                try
+                {
+                    Microsoft.Win32.Registry.SetValue(RegKey, "CursorSensitivity", CursorSensitivity, Microsoft.Win32.RegistryValueKind.DWord);
+                    Microsoft.Win32.Registry.SetValue(RegKey, "ScrollSpeed", ScrollSpeed, Microsoft.Win32.RegistryValueKind.DWord);
+                    Microsoft.Win32.Registry.SetValue(RegKey, "LowBatteryThreshold", LowBatteryThreshold, Microsoft.Win32.RegistryValueKind.DWord);
+                    Microsoft.Win32.Registry.SetValue(RegKey, "OsdVibration", OsdVibration ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+                    Microsoft.Win32.Registry.SetValue(RegKey, "MuteWhenSteamOpen", MuteWhenSteamOpen ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+                }
+                catch { }
+            }
+
+            public static string GetStartupShortcutPath()
+            {
+                return System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Startup),
+                    "XboxBatteryMonitor.lnk");
+            }
+
+            public static bool IsAutoStartEnabled()
+            {
+                return System.IO.File.Exists(GetStartupShortcutPath());
+            }
+
+            public static void SetAutoStart(bool enabled)
+            {
+                try
+                {
+                    string path = GetStartupShortcutPath();
+                    if (!enabled)
+                    {
+                        if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+                        return;
+                    }
+                    Type wshType = Type.GetTypeFromProgID("WScript.Shell");
+                    if (wshType == null) return;
+                    object wsh = Activator.CreateInstance(wshType);
+                    object shortcut = wshType.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, wsh, new object[] { path });
+                    Type scType = shortcut.GetType();
+                    string exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                    scType.InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { exePath });
+                    scType.InvokeMember("WorkingDirectory", System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { System.IO.Path.GetDirectoryName(exePath) });
+                    scType.InvokeMember("Description", System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { "Xbox Controller Battery Monitor" });
+                    scType.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, shortcut, null);
+                }
+                catch { }
+            }
+
+            private static int ReadInt(string name, int def, int min, int max)
+            {
+                try
+                {
+                    object val = Microsoft.Win32.Registry.GetValue(RegKey, name, def);
+                    if (val is int)
+                    {
+                        return Math.Max(min, Math.Min(max, (int)val));
+                    }
+                }
+                catch { }
+                return def;
+            }
+        }
+
         internal static bool IsSteamXboxSupportEnabled(string configVdfContent)
         {
             if (string.IsNullOrEmpty(configVdfContent)) return false;
@@ -449,7 +534,7 @@ namespace XboxBatteryMonitor
                 || configVdfContent.IndexOf("\"controller_xbox_support\" \"1\"", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        internal static bool EvaluateBatteryAlert(int? exactPercent, byte xinputLevel, bool isWired, ref bool notifiedLow)
+        internal static bool EvaluateBatteryAlert(int? exactPercent, byte xinputLevel, bool isWired, ref bool notifiedLow, int lowThreshold = LOW_THRESHOLD_PERCENT)
         {
             if (isWired)
             {
@@ -457,12 +542,13 @@ namespace XboxBatteryMonitor
                 return false;
             }
 
+            int resetThreshold = Math.Min(95, lowThreshold + 5);
             bool isLow = exactPercent.HasValue
-                ? exactPercent.Value <= LOW_THRESHOLD_PERCENT
+                ? exactPercent.Value <= lowThreshold
                 : (xinputLevel <= BATTERY_LEVEL_LOW);
 
             bool isRecovered = exactPercent.HasValue
-                ? exactPercent.Value >= RESET_THRESHOLD_PERCENT
+                ? exactPercent.Value >= resetThreshold
                 : (xinputLevel > BATTERY_LEVEL_LOW);
 
             if (isLow && !notifiedLow)
@@ -530,6 +616,8 @@ namespace XboxBatteryMonitor
             private readonly OsdKeyboardForm _osdKeyboard;
             private readonly SynchronizationContext _uiContext;
             private volatile float _sensitivityMultiplier = 1.0f;
+            private volatile float _scrollMultiplier = 1.0f;
+            private volatile bool _vibrationEnabled = true;
             private bool _prevLeftClick = false;
             private bool _prevRightClick = false;
             private bool _prevMiddleClick = false;
@@ -540,17 +628,31 @@ namespace XboxBatteryMonitor
             private double _cursorAccumY = 0;
             private long _lastNavTickMs = 0;
 
-            public DesktopController(OsdKeyboardForm osdKeyboard = null, SynchronizationContext uiContext = null, float sensitivityMultiplier = 1.0f)
+            public DesktopController(OsdKeyboardForm osdKeyboard = null, SynchronizationContext uiContext = null, float sensitivityMultiplier = 1.0f, float scrollMultiplier = 1.0f, bool vibrationEnabled = true)
             {
                 _osdKeyboard = osdKeyboard;
                 _uiContext = uiContext;
                 _sensitivityMultiplier = Math.Max(0.25f, Math.Min(3.0f, sensitivityMultiplier));
+                _scrollMultiplier = Math.Max(0.25f, Math.Min(3.0f, scrollMultiplier));
+                _vibrationEnabled = vibrationEnabled;
             }
 
             public float SensitivityMultiplier
             {
                 get { return _sensitivityMultiplier; }
                 set { _sensitivityMultiplier = Math.Max(0.25f, Math.Min(3.0f, value)); }
+            }
+
+            public float ScrollMultiplier
+            {
+                get { return _scrollMultiplier; }
+                set { _scrollMultiplier = Math.Max(0.25f, Math.Min(3.0f, value)); }
+            }
+
+            public bool VibrationEnabled
+            {
+                get { return _vibrationEnabled; }
+                set { _vibrationEnabled = value; }
             }
 
             private void RunOnUi(Action action)
@@ -633,13 +735,13 @@ namespace XboxBatteryMonitor
                         _lastNavTickMs = nowMs;
                         int dx = navDx, dy = navDy;
                         RunOnUi(() => _osdKeyboard.MoveSelection(dx, dy));
-                        PulseVibration(0, 9000, 20);
+                        if (_vibrationEnabled) PulseVibration(0, 9000, 20);
                     }
 
                     if ((pressed & BTN_A) != 0) RunOnUi(() => _osdKeyboard.ActivateSelected());
-                    if ((pressed & BTN_LB) != 0) { SendKeyTap(0x08); PulseVibration(10000, 18000, 40); } // Backspace
-                    if ((pressed & BTN_Y) != 0) { SendKeyTap(0x20); PulseVibration(10000, 18000, 40); }  // Space
-                    if ((pressed & BTN_RB) != 0) { SendKeyTap(0x0D); PulseVibration(12000, 22000, 45); } // Enter
+                    if ((pressed & BTN_LB) != 0) { SendKeyTap(0x08); if (_vibrationEnabled) PulseVibration(10000, 18000, 40); } // Backspace
+                    if ((pressed & BTN_Y) != 0) { SendKeyTap(0x20); if (_vibrationEnabled) PulseVibration(10000, 18000, 40); }  // Space
+                    if ((pressed & BTN_RB) != 0) { SendKeyTap(0x0D); if (_vibrationEnabled) PulseVibration(12000, 22000, 45); } // Enter
                     if ((pressed & BTN_START) != 0 || (pressed & BTN_B) != 0) RunOnUi(() => _osdKeyboard.HideKeyboard());
 
                     _prevButtons = gp.wButtons;
@@ -650,7 +752,7 @@ namespace XboxBatteryMonitor
                 MoveCursorFromStick(gp.sThumbLX, gp.sThumbLY, dtSeconds, _sensitivityMultiplier);
 
                 // 2. Right Stick -> Mouse Scroll Wheel
-                ScrollFromStick(gp.sThumbRX, gp.sThumbRY, dtSeconds);
+                ScrollFromStick(gp.sThumbRX, gp.sThumbRY, dtSeconds, _scrollMultiplier);
 
                 // 3. A or RT -> Left Mouse Click (holdable)
                 bool leftDown = ((gp.wButtons & BTN_A) != 0) || (gp.bRightTrigger > TRIGGER_THRESHOLD);
@@ -733,13 +835,13 @@ namespace XboxBatteryMonitor
                 return new Point(dx, dy);
             }
 
-            internal static int ComputeScrollDelta(short rawAxis, ref double accum, double dtSeconds = 1.0 / 60.0)
+            internal static int ComputeScrollDelta(short rawAxis, ref double accum, double dtSeconds = 1.0 / 60.0, double scrollMultiplier = 1.0)
             {
                 int absAxis = Math.Abs((int)rawAxis);
                 if (absAxis <= STICK_DEADZONE) return 0;
 
                 double norm = Math.Min(1.0, (absAxis - STICK_DEADZONE) / (32767.0 - STICK_DEADZONE));
-                accum += Math.Sign((int)rawAxis) * norm * 2100.0 * Math.Min(dtSeconds, 0.05);
+                accum += Math.Sign((int)rawAxis) * norm * 2100.0 * scrollMultiplier * Math.Min(dtSeconds, 0.05);
                 int delta = (int)accum;
                 if (Math.Abs(delta) >= 20)
                 {
@@ -760,9 +862,9 @@ namespace XboxBatteryMonitor
                 SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
             }
 
-            private void ScrollFromStick(short rawX, short rawY, double dtSeconds)
+            private void ScrollFromStick(short rawX, short rawY, double dtSeconds, double scrollMultiplier)
             {
-                int deltaY = ComputeScrollDelta(rawY, ref _scrollAccumY, dtSeconds);
+                int deltaY = ComputeScrollDelta(rawY, ref _scrollAccumY, dtSeconds, scrollMultiplier);
                 if (deltaY != 0)
                 {
                     INPUT[] inp = new INPUT[1];
@@ -771,7 +873,7 @@ namespace XboxBatteryMonitor
                     SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
                 }
 
-                int deltaX = ComputeScrollDelta(rawX, ref _scrollAccumX, dtSeconds);
+                int deltaX = ComputeScrollDelta(rawX, ref _scrollAccumX, dtSeconds, scrollMultiplier);
                 if (deltaX != 0)
                 {
                     INPUT[] inp = new INPUT[1];
@@ -828,6 +930,7 @@ namespace XboxBatteryMonitor
             private readonly System.Windows.Forms.Timer _hideTimer;
             private readonly OsdKeyboardForm _osdKeyboard;
             private readonly DesktopController _desktopController;
+            private readonly AppSettings _settings;
             private readonly ToolStripMenuItem _desktopMenuItem;
             private Thread _desktopThread;
             private volatile bool _desktopThreadRunning = false;
@@ -841,11 +944,18 @@ namespace XboxBatteryMonitor
             private IntPtr _currentHIcon = IntPtr.Zero;
             private DetailsForm _detailsForm;
             private LayoutForm _layoutForm;
+            private SettingsForm _settingsForm;
 
             public MonitorContext(bool testMode)
             {
-                _osdKeyboard = new OsdKeyboardForm();
-                _desktopController = new DesktopController(_osdKeyboard, SynchronizationContext.Current, LoadSensitivityPercent() / 100.0f);
+                _settings = AppSettings.Load();
+                _osdKeyboard = new OsdKeyboardForm(() => _settings.OsdVibration);
+                _desktopController = new DesktopController(
+                    _osdKeyboard,
+                    SynchronizationContext.Current,
+                    _settings.CursorSensitivity / 100.0f,
+                    _settings.ScrollSpeed / 100.0f,
+                    _settings.OsdVibration);
 
                 ContextMenuStrip menu = new ContextMenuStrip();
                 menu.Items.Add("Show Controller Details", null, (s, e) => ShowDetails());
@@ -855,6 +965,7 @@ namespace XboxBatteryMonitor
                 menu.Items.Add(_desktopMenuItem);
                 menu.Items.Add("On-Screen Keyboard...", null, (s, e) => _osdKeyboard.ShowKeyboard());
                 menu.Items.Add("View Desktop Layout...", null, (s, e) => ShowLayoutMap());
+                menu.Items.Add("Settings...", null, (s, e) => ShowSettings());
                 menu.Items.Add("Test Notification", null, (s, e) => ShowTestNotification());
                 menu.Items.Add(new ToolStripSeparator());
                 menu.Items.Add("Exit", null, (s, e) => ExitApplication());
@@ -946,7 +1057,7 @@ namespace XboxBatteryMonitor
                     {
                         _wasConnected = false;
                         SetTrayTooltip("Xbox Controller: Disconnected");
-                        if (!IsSteamRunning())
+                        if (!(_settings.MuteWhenSteamOpen && IsSteamRunning()))
                         {
                             _trayIcon.ShowBalloonTip(5000, "Xbox Controller", "Controller disconnected.", ToolTipIcon.None);
                             _hideTimer.Stop();
@@ -996,7 +1107,7 @@ namespace XboxBatteryMonitor
                 string tooltip = FormatTrayTooltip(primary.ModelName, primary.IsWired, primary.ExactPercent, primary.XInputLevel);
                 SetTrayTooltip(tooltip);
 
-                if (justConnected && checkAlerts && !IsSteamRunning())
+                if (justConnected && checkAlerts && !(_settings.MuteWhenSteamOpen && IsSteamRunning()))
                 {
                     string connectMsg = primary.IsWired
                         ? string.Format("{0} connected (USB Powered).", primary.ModelName)
@@ -1016,13 +1127,13 @@ namespace XboxBatteryMonitor
                 foreach (var c in controllers)
                 {
                     int idx = c.Slot - 1;
-                    if (EvaluateBatteryAlert(c.ExactPercent, c.XInputLevel, c.IsWired, ref _notifiedLow[idx]))
+                    if (EvaluateBatteryAlert(c.ExactPercent, c.XInputLevel, c.IsWired, ref _notifiedLow[idx], _settings.LowBatteryThreshold))
                     {
-                        if (!IsSteamRunning())
+                        if (!(_settings.MuteWhenSteamOpen && IsSteamRunning()))
                         {
                             string msg = c.ExactPercent.HasValue
                                 ? string.Format("{0} (Slot {1}) is at {2}%. Please charge or swap batteries.", c.ModelName, c.Slot, c.ExactPercent.Value)
-                                : string.Format("{0} (Slot {1}) battery is low (below ~20%).", c.ModelName, c.Slot);
+                                : string.Format("{0} (Slot {1}) battery is low (below ~{2}%).", c.ModelName, c.Slot, _settings.LowBatteryThreshold);
 
                             _trayIcon.ShowBalloonTip(8000, "Low Xbox Controller Battery", msg, ToolTipIcon.Warning);
                             _notifiedLow[idx] = true;
@@ -1288,30 +1399,25 @@ namespace XboxBatteryMonitor
                 _trayIcon.ShowBalloonTip(6000, "Xbox Battery Monitor", msg, ToolTipIcon.Info);
             }
 
-            private static int LoadSensitivityPercent()
+            private void ShowSettings()
             {
-                try
+                if (_settingsForm == null || _settingsForm.IsDisposed)
                 {
-                    object val = Microsoft.Win32.Registry.GetValue(
-                        @"HKEY_CURRENT_USER\Software\XboxBatteryMonitor", "CursorSensitivity", 100);
-                    if (val is int)
+                    _settingsForm = new SettingsForm(_settings, () =>
                     {
-                        int pct = (int)val;
-                        return Math.Max(25, Math.Min(300, pct));
-                    }
+                        _desktopController.SensitivityMultiplier = _settings.CursorSensitivity / 100.0f;
+                        _desktopController.ScrollMultiplier = _settings.ScrollSpeed / 100.0f;
+                        _desktopController.VibrationEnabled = _settings.OsdVibration;
+                        _settings.Save();
+                        if (_detailsForm != null && !_detailsForm.IsDisposed && _detailsForm.Visible)
+                        {
+                            _detailsForm.SyncSensitivity(_settings.CursorSensitivity, _settings.LowBatteryThreshold);
+                        }
+                    });
                 }
-                catch { }
-                return 100;
-            }
-
-            private static void SaveSensitivityPercent(int pct)
-            {
-                try
-                {
-                    Microsoft.Win32.Registry.SetValue(
-                        @"HKEY_CURRENT_USER\Software\XboxBatteryMonitor", "CursorSensitivity", pct, Microsoft.Win32.RegistryValueKind.DWord);
-                }
-                catch { }
+                _settingsForm.LoadFromSettings();
+                if (!_settingsForm.Visible) _settingsForm.Show();
+                _settingsForm.Activate();
             }
 
             private void ShowDetails()
@@ -1320,13 +1426,15 @@ namespace XboxBatteryMonitor
                 {
                     _detailsForm = new DetailsForm(
                         () => GetConnectedControllers(),
-                        () => ShowTestNotification(),
+                        () => ShowSettings(),
                         () => ShowLayoutMap(),
-                        () => (int)Math.Round(_desktopController.SensitivityMultiplier * 100),
+                        () => _settings.CursorSensitivity,
+                        () => _settings.LowBatteryThreshold,
                         pct =>
                         {
+                            _settings.CursorSensitivity = pct;
                             _desktopController.SensitivityMultiplier = pct / 100.0f;
-                            SaveSensitivityPercent(pct);
+                            _settings.Save();
                         });
                 }
 
@@ -1714,12 +1822,72 @@ namespace XboxBatteryMonitor
             }
         }
 
+        private class FluentToggle : Control
+        {
+            private bool _checked = false;
+            public event Action<bool> CheckedChanged;
+
+            public bool Checked
+            {
+                get { return _checked; }
+                set
+                {
+                    if (_checked != value)
+                    {
+                        _checked = value;
+                        Invalidate();
+                    }
+                }
+            }
+
+            public FluentToggle()
+            {
+                DoubleBuffered = true;
+                Cursor = Cursors.Hand;
+                Size = new Size(44, 22);
+            }
+
+            protected override void OnClick(EventArgs e)
+            {
+                _checked = !_checked;
+                Invalidate();
+                if (CheckedChanged != null) CheckedChanged(_checked);
+                base.OnClick(e);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                Graphics g = e.Graphics;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+
+                RectangleF track = new RectangleF(1, 1, Width - 3, Height - 3);
+                Color bg = _checked ? Color.FromArgb(0, 120, 212) : Color.FromArgb(52, 52, 58);
+                Color border = _checked ? bg : Color.FromArgb(120, 120, 130);
+
+                using (GraphicsPath path = MonitorContext.CreateRoundedRect(track, (Height - 3) / 2f))
+                using (SolidBrush fill = new SolidBrush(bg))
+                using (Pen pen = new Pen(border, 1.3f))
+                {
+                    g.FillPath(fill, path);
+                    g.DrawPath(pen, path);
+                }
+
+                float knobSize = Height - 9;
+                float knobX = _checked ? Width - knobSize - 5 : 4;
+                using (SolidBrush knob = new SolidBrush(Color.White))
+                {
+                    g.FillEllipse(knob, knobX, 4f, knobSize, knobSize);
+                }
+            }
+        }
+
         private class DetailsForm : Form
         {
             private readonly Func<List<ControllerSnapshot>> _refreshProvider;
-            private readonly Action _onTestNotify;
+            private readonly Action _onOpenSettings;
             private readonly Action _onShowLayout;
             private readonly Func<int> _getSensitivity;
+            private readonly Func<int> _getLowThreshold;
             private readonly Action<int> _setSensitivity;
             private readonly Label _lblModel;
             private readonly Label _lblConnection;
@@ -1731,15 +1899,17 @@ namespace XboxBatteryMonitor
 
             public DetailsForm(
                 Func<List<ControllerSnapshot>> refreshProvider,
-                Action onTestNotify,
+                Action onOpenSettings,
                 Action onShowLayout,
                 Func<int> getSensitivity,
+                Func<int> getLowThreshold,
                 Action<int> setSensitivity)
             {
                 _refreshProvider = refreshProvider;
-                _onTestNotify = onTestNotify;
+                _onOpenSettings = onOpenSettings;
                 _onShowLayout = onShowLayout;
                 _getSensitivity = getSensitivity;
+                _getLowThreshold = getLowThreshold;
                 _setSensitivity = setSensitivity;
 
                 Text = "Xbox Controller";
@@ -1870,14 +2040,14 @@ namespace XboxBatteryMonitor
                 };
                 btnRefresh.Click += (s, e) => UpdateData(_refreshProvider());
 
-                FluentButton btnTest = new FluentButton
+                FluentButton btnSettings = new FluentButton
                 {
-                    Text = "Test Alert",
+                    Text = "Settings",
                     Location = new Point(98, 246),
                     Size = new Size(84, 32),
                     ForeColor = Color.White
                 };
-                btnTest.Click += (s, e) => _onTestNotify();
+                btnSettings.Click += (s, e) => _onOpenSettings();
 
                 FluentButton btnLayout = new FluentButton
                 {
@@ -1898,7 +2068,7 @@ namespace XboxBatteryMonitor
                 };
                 btnClose.Click += (s, e) => Hide();
 
-                Controls.AddRange(new Control[] { headerCard, batteryCard, sensCard, btnRefresh, btnTest, btnLayout, btnClose });
+                Controls.AddRange(new Control[] { headerCard, batteryCard, sensCard, btnRefresh, btnSettings, btnLayout, btnClose });
 
                 FormClosing += (s, e) =>
                 {
@@ -1908,6 +2078,13 @@ namespace XboxBatteryMonitor
                         Hide();
                     }
                 };
+            }
+
+            public void SyncSensitivity(int sensPct, int lowThreshold)
+            {
+                _sensSlider.Value = sensPct;
+                _lblSensValue.Text = string.Format("Desktop Cursor Sensitivity: {0}%", sensPct);
+                UpdateData(_refreshProvider());
             }
 
             protected override void OnHandleCreated(EventArgs e)
@@ -1942,6 +2119,7 @@ namespace XboxBatteryMonitor
                 _lblModel.Text = c.ModelName;
                 _lblConnection.Text = string.Format("{0}  •  Controller #{1}", c.ConnectionType, c.Slot);
 
+                int lowThreshold = _getLowThreshold();
                 if (c.IsWired)
                 {
                     _lblBatteryValue.Text = "USB Connected (Wired / Charging)";
@@ -1953,7 +2131,7 @@ namespace XboxBatteryMonitor
                 else if (c.ExactPercent.HasValue)
                 {
                     int pct = Math.Max(0, Math.Min(100, c.ExactPercent.Value));
-                    Color cColor = pct <= LOW_THRESHOLD_PERCENT
+                    Color cColor = pct <= lowThreshold
                         ? Color.FromArgb(248, 113, 113)
                         : pct <= 40 ? Color.FromArgb(252, 211, 77) : Color.FromArgb(134, 239, 172);
                     _lblBatteryValue.Text = c.IsChargingInferred
@@ -1962,7 +2140,7 @@ namespace XboxBatteryMonitor
                     _lblBatteryValue.ForeColor = cColor;
                     _progressBar.FillColor = cColor;
                     _progressBar.Value = pct;
-                    _lblBatterySub.Text = string.Format("{0}  •  Alert at ≤ {1}%", c.BatteryTypeLabel, LOW_THRESHOLD_PERCENT);
+                    _lblBatterySub.Text = string.Format("{0}  •  Alert at ≤ {1}%", c.BatteryTypeLabel, lowThreshold);
                 }
                 else
                 {
@@ -1975,7 +2153,7 @@ namespace XboxBatteryMonitor
                     _lblBatteryValue.ForeColor = cColor;
                     _progressBar.FillColor = cColor;
                     _progressBar.Value = approx;
-                    _lblBatterySub.Text = string.Format("{0}  •  Alert at ≤ {1}%", c.BatteryTypeLabel, LOW_THRESHOLD_PERCENT);
+                    _lblBatterySub.Text = string.Format("{0}  •  Alert at ≤ {1}%", c.BatteryTypeLabel, lowThreshold);
                 }
             }
         }
@@ -2240,6 +2418,113 @@ namespace XboxBatteryMonitor
             }
         }
 
+        private class SettingsForm : Form
+        {
+            private readonly AppSettings _settings;
+            private readonly Action _onChanged;
+            private readonly Label _lblCursor;
+            private readonly FluentSlider _sldCursor;
+            private readonly Label _lblScroll;
+            private readonly FluentSlider _sldScroll;
+            private readonly Label _lblLowBat;
+            private readonly FluentSlider _sldLowBat;
+            private readonly FluentToggle _togVib;
+            private readonly FluentToggle _togSteamMute;
+            private readonly FluentToggle _togAutoStart;
+
+            public SettingsForm(AppSettings settings, Action onChanged)
+            {
+                _settings = settings;
+                _onChanged = onChanged;
+
+                Text = "Xbox Battery Monitor — Settings";
+                FormBorderStyle = FormBorderStyle.FixedDialog;
+                ShowIcon = false;
+                MaximizeBox = false;
+                MinimizeBox = false;
+                AutoScaleMode = AutoScaleMode.Dpi;
+                StartPosition = FormStartPosition.CenterScreen;
+                ClientSize = new Size(384, 392);
+                BackColor = Color.FromArgb(28, 28, 30);
+                ForeColor = Color.White;
+                Font = new Font("Segoe UI Variable Text", 9f);
+
+                FluentCard sliderCard = new FluentCard { Location = new Point(14, 14), Size = new Size(356, 176) };
+
+                _lblCursor = new Label { Location = new Point(14, 10), Size = new Size(328, 18), ForeColor = Color.White, BackColor = Color.Transparent, Font = new Font("Segoe UI Variable Text", 9f, FontStyle.Bold) };
+                _sldCursor = new FluentSlider { Location = new Point(12, 30), Size = new Size(332, 22), Minimum = 25, Maximum = 300 };
+                _sldCursor.ValueChanged += v => { _settings.CursorSensitivity = v; _lblCursor.Text = string.Format("Desktop Cursor Sensitivity: {0}%", v); _onChanged(); };
+
+                _lblScroll = new Label { Location = new Point(14, 62), Size = new Size(328, 18), ForeColor = Color.White, BackColor = Color.Transparent, Font = new Font("Segoe UI Variable Text", 9f, FontStyle.Bold) };
+                _sldScroll = new FluentSlider { Location = new Point(12, 82), Size = new Size(332, 22), Minimum = 25, Maximum = 300 };
+                _sldScroll.ValueChanged += v => { _settings.ScrollSpeed = v; _lblScroll.Text = string.Format("Right Stick Scroll Speed: {0}%", v); _onChanged(); };
+
+                _lblLowBat = new Label { Location = new Point(14, 114), Size = new Size(328, 18), ForeColor = Color.White, BackColor = Color.Transparent, Font = new Font("Segoe UI Variable Text", 9f, FontStyle.Bold) };
+                _sldLowBat = new FluentSlider { Location = new Point(12, 134), Size = new Size(332, 22), Minimum = 10, Maximum = 30 };
+                _sldLowBat.ValueChanged += v => { _settings.LowBatteryThreshold = v; _lblLowBat.Text = string.Format("Low Battery Alert Threshold: {0}%", v); _onChanged(); };
+
+                sliderCard.Controls.AddRange(new Control[] { _lblCursor, _sldCursor, _lblScroll, _sldScroll, _lblLowBat, _sldLowBat });
+
+                FluentCard toggleCard = new FluentCard { Location = new Point(14, 200), Size = new Size(356, 134) };
+
+                Label lblVib = new Label { Text = "OSD Keyboard Vibration", Location = new Point(14, 14), Size = new Size(260, 20), ForeColor = Color.White, BackColor = Color.Transparent };
+                _togVib = new FluentToggle { Location = new Point(296, 12) };
+                _togVib.CheckedChanged += v => { _settings.OsdVibration = v; _onChanged(); };
+
+                Label lblSteam = new Label { Text = "Mute Alerts When Steam Is Open", Location = new Point(14, 54), Size = new Size(260, 20), ForeColor = Color.White, BackColor = Color.Transparent };
+                _togSteamMute = new FluentToggle { Location = new Point(296, 52) };
+                _togSteamMute.CheckedChanged += v => { _settings.MuteWhenSteamOpen = v; _onChanged(); };
+
+                Label lblAuto = new Label { Text = "Auto-Start with Windows", Location = new Point(14, 94), Size = new Size(260, 20), ForeColor = Color.White, BackColor = Color.Transparent };
+                _togAutoStart = new FluentToggle { Location = new Point(296, 92) };
+                _togAutoStart.CheckedChanged += v => { AppSettings.SetAutoStart(v); };
+
+                toggleCard.Controls.AddRange(new Control[] { lblVib, _togVib, lblSteam, _togSteamMute, lblAuto, _togAutoStart });
+
+                FluentButton btnClose = new FluentButton { Text = "Done", Location = new Point(280, 346), Size = new Size(90, 32), ForeColor = Color.White, IsPrimary = true };
+                btnClose.Click += (s, e) => Hide();
+
+                Controls.AddRange(new Control[] { sliderCard, toggleCard, btnClose });
+
+                FormClosing += (s, e) =>
+                {
+                    if (e.CloseReason == CloseReason.UserClosing)
+                    {
+                        e.Cancel = true;
+                        Hide();
+                    }
+                };
+            }
+
+            protected override void OnHandleCreated(EventArgs e)
+            {
+                base.OnHandleCreated(e);
+                try
+                {
+                    int dark = 1;
+                    DwmSetWindowAttribute(Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+                    int round = DWMWCP_ROUND;
+                    DwmSetWindowAttribute(Handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref round, sizeof(int));
+                    int borderColor = 0x00424246;
+                    DwmSetWindowAttribute(Handle, DWMWA_BORDER_COLOR, ref borderColor, sizeof(int));
+                }
+                catch { }
+            }
+
+            public void LoadFromSettings()
+            {
+                _sldCursor.Value = _settings.CursorSensitivity;
+                _lblCursor.Text = string.Format("Desktop Cursor Sensitivity: {0}%", _settings.CursorSensitivity);
+                _sldScroll.Value = _settings.ScrollSpeed;
+                _lblScroll.Text = string.Format("Right Stick Scroll Speed: {0}%", _settings.ScrollSpeed);
+                _sldLowBat.Value = _settings.LowBatteryThreshold;
+                _lblLowBat.Text = string.Format("Low Battery Alert Threshold: {0}%", _settings.LowBatteryThreshold);
+                _togVib.Checked = _settings.OsdVibration;
+                _togSteamMute.Checked = _settings.MuteWhenSteamOpen;
+                _togAutoStart.Checked = AppSettings.IsAutoStartEnabled();
+            }
+        }
+
         internal class OsdKeyboardForm : Form
         {
             private readonly string[][] _alphaRows = new string[][]
@@ -2258,6 +2543,7 @@ namespace XboxBatteryMonitor
                 new[] { "ABC","Space","↵","✕" }
             };
 
+            private readonly Func<bool> _isVibrationEnabled;
             private bool _shift = false;
             private bool _symbols = false;
             private int _selRow = 1;
@@ -2277,8 +2563,9 @@ namespace XboxBatteryMonitor
                 }
             }
 
-            public OsdKeyboardForm()
+            public OsdKeyboardForm(Func<bool> isVibrationEnabled = null)
             {
+                _isVibrationEnabled = isVibrationEnabled;
                 FormBorderStyle = FormBorderStyle.None;
                 ShowInTaskbar = false;
                 TopMost = true;
@@ -2331,7 +2618,10 @@ namespace XboxBatteryMonitor
             {
                 if (Visible) HideKeyboard();
                 else ShowKeyboard();
-                DesktopController.PulseVibration(0, 14000, 30);
+                if (_isVibrationEnabled == null || _isVibrationEnabled())
+                {
+                    DesktopController.PulseVibration(0, 14000, 30);
+                }
             }
 
             public void ShowKeyboard()
@@ -2377,7 +2667,10 @@ namespace XboxBatteryMonitor
 
             private void PressKey(string key)
             {
-                DesktopController.PulseVibration(14000, 24000, 45);
+                if (_isVibrationEnabled == null || _isVibrationEnabled())
+                {
+                    DesktopController.PulseVibration(14000, 24000, 45);
+                }
 
                 if (key == "⌫") { DesktopController.SendKeyTap(0x08); return; }
                 if (key == "↵") { DesktopController.SendKeyTap(0x0D); return; }
