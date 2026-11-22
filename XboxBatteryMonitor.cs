@@ -1116,6 +1116,29 @@ namespace XboxBatteryMonitor
                     IntPtr hwnd = GetForegroundWindow();
                     if (hwnd == IntPtr.Zero) return false;
 
+                    uint pid;
+                    GetWindowThreadProcessId(hwnd, out pid);
+                    if (pid != 0)
+                    {
+                        using (Process proc = Process.GetProcessById((int)pid))
+                        {
+                            string pName = proc.ProcessName;
+                            // Don't pause Desktop Control for fullscreen browsers/video players (e.g. fullscreen YouTube)
+                            if (pName.Equals("chrome", StringComparison.OrdinalIgnoreCase)
+                                || pName.Equals("msedge", StringComparison.OrdinalIgnoreCase)
+                                || pName.Equals("firefox", StringComparison.OrdinalIgnoreCase)
+                                || pName.Equals("brave", StringComparison.OrdinalIgnoreCase)
+                                || pName.Equals("opera", StringComparison.OrdinalIgnoreCase)
+                                || pName.Equals("vivaldi", StringComparison.OrdinalIgnoreCase)
+                                || pName.Equals("arc", StringComparison.OrdinalIgnoreCase)
+                                || pName.Equals("vlc", StringComparison.OrdinalIgnoreCase)
+                                || pName.Equals("mpv", StringComparison.OrdinalIgnoreCase))
+                            {
+                                return false;
+                            }
+                        }
+                    }
+
                     StringBuilder cls = new StringBuilder(64);
                     GetClassName(hwnd, cls, cls.Capacity);
                     string className = cls.ToString();
