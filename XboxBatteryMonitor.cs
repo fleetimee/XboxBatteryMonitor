@@ -164,6 +164,12 @@ namespace XboxBatteryMonitor
         [DllImport("shell32.dll")]
         private static extern int SHQueryUserNotificationState(out int pquns);
 
+        [DllImport("winmm.dll")]
+        private static extern uint timeBeginPeriod(uint uPeriod);
+
+        [DllImport("winmm.dll")]
+        private static extern uint timeEndPeriod(uint uPeriod);
+
         [StructLayout(LayoutKind.Sequential)]
         struct RECT
         {
@@ -522,6 +528,7 @@ namespace XboxBatteryMonitor
             private const int TRIGGER_THRESHOLD = 40;
 
             private readonly OsdKeyboardForm _osdKeyboard;
+            private readonly SynchronizationContext _uiContext;
             private bool _prevLeftClick = false;
             private bool _prevRightClick = false;
             private bool _prevMiddleClick = false;
@@ -532,9 +539,16 @@ namespace XboxBatteryMonitor
             private double _cursorAccumY = 0;
             private long _lastNavTickMs = 0;
 
-            public DesktopController(OsdKeyboardForm osdKeyboard = null)
+            public DesktopController(OsdKeyboardForm osdKeyboard = null, SynchronizationContext uiContext = null)
             {
                 _osdKeyboard = osdKeyboard;
+                _uiContext = uiContext;
+            }
+
+            private void RunOnUi(Action action)
+            {
+                if (_uiContext != null) _uiContext.Post(_ => action(), null);
+                else action();
             }
 
             public static void PulseVibration(ushort leftMotor, ushort rightMotor, int durationMs)
@@ -584,7 +598,7 @@ namespace XboxBatteryMonitor
                 // Toggle compact OSD Keyboard on X
                 if ((pressed & BTN_X) != 0 && _osdKeyboard != null)
                 {
-                    _osdKeyboard.ToggleFromController();
+                    RunOnUi(() => _osdKeyboard.ToggleFromController());
                     _prevButtons = gp.wButtons;
                     return;
                 }
@@ -609,15 +623,16 @@ namespace XboxBatteryMonitor
                     if (navDx != 0 || navDy != 0)
                     {
                         _lastNavTickMs = nowMs;
-                        _osdKeyboard.MoveSelection(navDx, navDy);
+                        int dx = navDx, dy = navDy;
+                        RunOnUi(() => _osdKeyboard.MoveSelection(dx, dy));
                         PulseVibration(0, 9000, 20);
                     }
 
-                    if ((pressed & BTN_A) != 0) _osdKeyboard.ActivateSelected();
+                    if ((pressed & BTN_A) != 0) RunOnUi(() => _osdKeyboard.ActivateSelected());
                     if ((pressed & BTN_LB) != 0) { SendKeyTap(0x08); PulseVibration(10000, 18000, 40); } // Backspace
                     if ((pressed & BTN_Y) != 0) { SendKeyTap(0x20); PulseVibration(10000, 18000, 40); }  // Space
                     if ((pressed & BTN_RB) != 0) { SendKeyTap(0x0D); PulseVibration(12000, 22000, 45); } // Enter
-                    if ((pressed & BTN_START) != 0 || (pressed & BTN_B) != 0) _osdKeyboard.HideKeyboard();
+                    if ((pressed & BTN_START) != 0 || (pressed & BTN_B) != 0) RunOnUi(() => _osdKeyboard.HideKeyboard());
 
                     _prevButtons = gp.wButtons;
                     return;
@@ -803,17 +818,17 @@ namespace XboxBatteryMonitor
             private readonly System.Windows.Forms.Timer _pollTimer;
             private readonly System.Windows.Forms.Timer _idleCheckTimer;
             private readonly System.Windows.Forms.Timer _hideTimer;
-            private readonly System.Windows.Forms.Timer _desktopTimer;
             private readonly OsdKeyboardForm _osdKeyboard;
             private readonly DesktopController _desktopController;
             private readonly ToolStripMenuItem _desktopMenuItem;
+            private Thread _desktopThread;
+            private volatile bool _desktopThreadRunning = false;
             private readonly bool[] _notifiedLow = new bool[4];
             private readonly int?[] _lastPercent = new int?[4];
             private readonly bool[] _isChargingInferred = new bool[4];
             private bool _wasConnected = false;
             private bool _desktopModeEnabled = false;
-            private bool _steamPausedDesktop = false;
-            private int _desktopSteamCheckTicks = 0;
+            private volatile bool _steamPausedDesktop = false;
             private int _connectedTicks = 0;
             private IntPtr _currentHIcon = IntPtr.Zero;
             private DetailsForm _detailsForm;
@@ -822,7 +837,7 @@ namespace XboxBatteryMonitor
             public MonitorContext(bool testMode)
             {
                 _osdKeyboard = new OsdKeyboardForm();
-                _desktopController = new DesktopController(_osdKeyboard);
+                _desktopController = new DesktopController(_osdKeyboard, SynchronizationContext.Current);
 
                 ContextMenuStrip menu = new ContextMenuStrip();
                 menu.Items.Add("Show Controller Details", null, (s, e) => ShowDetails());
@@ -843,34 +858,6 @@ namespace XboxBatteryMonitor
                     ContextMenuStrip = menu
                 };
                 _trayIcon.DoubleClick += (s, e) => ShowDetails();
-
-                _desktopTimer = new System.Windows.Forms.Timer
-                {
-                    Interval = 8 // ~120 Hz + Stopwatch delta-time for smooth cursor movement
-                };
-                Stopwatch desktopSw = Stopwatch.StartNew();
-                _desktopTimer.Tick += (s, e) =>
-                {
-                    double dt = desktopSw.Elapsed.TotalSeconds;
-                    desktopSw.Restart();
-
-                    // Re-check Steam Desktop Layout, UWP system menus, or fullscreen/borderless game every ~0.5s
-                    if (_desktopSteamCheckTicks++ >= 60)
-                    {
-                        _desktopSteamCheckTicks = 0;
-                        bool osdOpen = (_osdKeyboard != null && _osdKeyboard.Visible);
-                        bool shouldPause = !osdOpen && (IsSteamDesktopLayoutActive() || IsFullscreenOrBorderlessAppFocused() || IsUwpGamepadAppFocused());
-                        if (shouldPause != _steamPausedDesktop)
-                        {
-                            _steamPausedDesktop = shouldPause;
-                            if (_steamPausedDesktop) _desktopController.Reset();
-                        }
-                    }
-                    if (!_steamPausedDesktop)
-                    {
-                        _desktopController.Tick(dt);
-                    }
-                };
 
                 _hideTimer = new System.Windows.Forms.Timer
                 {
@@ -943,8 +930,7 @@ namespace XboxBatteryMonitor
                     }
 
                     _pollTimer.Stop();
-                    _desktopTimer.Stop();
-                    _desktopController.Reset();
+                    StopDesktopThread();
                     _connectedTicks = 0;
                     if (!_idleCheckTimer.Enabled) _idleCheckTimer.Start();
 
@@ -983,9 +969,9 @@ namespace XboxBatteryMonitor
                 {
                     _pollTimer.Start();
                 }
-                if (_desktopModeEnabled && !_desktopTimer.Enabled)
+                if (_desktopModeEnabled && !_desktopThreadRunning)
                 {
-                    _desktopTimer.Start();
+                    StartDesktopThread();
                 }
                 foreach (var c in controllers)
                 {
@@ -1054,6 +1040,66 @@ namespace XboxBatteryMonitor
                 _layoutForm.Activate();
             }
 
+            private void StartDesktopThread()
+            {
+                if (_desktopThreadRunning) return;
+                _desktopThreadRunning = true;
+                _desktopThread = new Thread(() =>
+                {
+                    timeBeginPeriod(1); // 1ms Windows timer resolution for silky-smooth ~250 Hz cursor
+                    try
+                    {
+                        Stopwatch sw = Stopwatch.StartNew();
+                        Stopwatch pauseCheckSw = Stopwatch.StartNew();
+                        while (_desktopThreadRunning)
+                        {
+                            double dt = sw.Elapsed.TotalSeconds;
+                            sw.Restart();
+
+                            if (pauseCheckSw.ElapsedMilliseconds >= 400)
+                            {
+                                pauseCheckSw.Restart();
+                                bool osdOpen = (_osdKeyboard != null && _osdKeyboard.Visible);
+                                bool shouldPause = !osdOpen && (IsSteamDesktopLayoutActive() || IsFullscreenOrBorderlessAppFocused() || IsUwpGamepadAppFocused());
+                                if (shouldPause != _steamPausedDesktop)
+                                {
+                                    _steamPausedDesktop = shouldPause;
+                                    if (_steamPausedDesktop) _desktopController.Reset();
+                                }
+                            }
+
+                            if (!_steamPausedDesktop)
+                            {
+                                _desktopController.Tick(dt);
+                            }
+
+                            Thread.Sleep(4);
+                        }
+                    }
+                    finally
+                    {
+                        timeEndPeriod(1);
+                        _desktopController.Reset();
+                    }
+                })
+                {
+                    IsBackground = true,
+                    Priority = ThreadPriority.AboveNormal
+                };
+                _desktopThread.Start();
+            }
+
+            private void StopDesktopThread()
+            {
+                _desktopThreadRunning = false;
+                if (_desktopThread != null && _desktopThread.IsAlive)
+                {
+                    _desktopThread.Join(200);
+                    _desktopThread = null;
+                }
+                _desktopController.Reset();
+            }
+
             private void ToggleDesktopMode(bool enabled)
             {
                 _desktopModeEnabled = enabled;
@@ -1061,13 +1107,11 @@ namespace XboxBatteryMonitor
                 {
                     bool osdOpen = (_osdKeyboard != null && _osdKeyboard.Visible);
                     _steamPausedDesktop = !osdOpen && (IsSteamDesktopLayoutActive() || IsFullscreenOrBorderlessAppFocused() || IsUwpGamepadAppFocused());
-                    _desktopSteamCheckTicks = 0;
-                    _desktopTimer.Start();
+                    StartDesktopThread();
                 }
                 else
                 {
-                    _desktopTimer.Stop();
-                    _desktopController.Reset();
+                    StopDesktopThread();
                 }
                 if (_layoutForm != null && !_layoutForm.IsDisposed && _layoutForm.Visible)
                 {
@@ -1359,8 +1403,7 @@ namespace XboxBatteryMonitor
                 _pollTimer.Stop();
                 _idleCheckTimer.Stop();
                 _hideTimer.Stop();
-                _desktopTimer.Stop();
-                _desktopController.Reset();
+                StopDesktopThread();
                 _trayIcon.Visible = false;
                 if (_currentHIcon != IntPtr.Zero)
                 {
