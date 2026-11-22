@@ -30,6 +30,7 @@ namespace XboxBatteryMonitor.Desktop
         private readonly OsdKeyboardForm _osdKeyboard;
         private readonly SynchronizationContext _uiContext;
         private readonly ButtonBindings _bindings;
+        private readonly Action _onToggleCombo;
         private volatile float _sensitivityMultiplier = 1.0f;
         private volatile float _scrollMultiplier = 1.0f;
         private volatile bool _vibrationEnabled = true;
@@ -38,6 +39,7 @@ namespace XboxBatteryMonitor.Desktop
         private bool _prevMiddleClick = false;
         private bool _prevLtDown = false;
         private bool _prevRtDown = false;
+        private bool _comboHandled = false;
         private ushort _prevButtons = 0;
         private double _scrollAccumY = 0;
         private double _scrollAccumX = 0;
@@ -45,11 +47,12 @@ namespace XboxBatteryMonitor.Desktop
         private double _cursorAccumY = 0;
         private long _lastNavTickMs = 0;
 
-        public DesktopController(OsdKeyboardForm osdKeyboard = null, SynchronizationContext uiContext = null, ButtonBindings bindings = null, float sensitivityMultiplier = 1.0f, float scrollMultiplier = 1.0f, bool vibrationEnabled = true)
+        public DesktopController(OsdKeyboardForm osdKeyboard = null, SynchronizationContext uiContext = null, ButtonBindings bindings = null, Action onToggleCombo = null, float sensitivityMultiplier = 1.0f, float scrollMultiplier = 1.0f, bool vibrationEnabled = true)
         {
             _osdKeyboard = osdKeyboard;
             _uiContext = uiContext;
             _bindings = bindings ?? new ButtonBindings();
+            _onToggleCombo = onToggleCombo;
             _sensitivityMultiplier = Math.Max(0.25f, Math.Min(3.0f, sensitivityMultiplier));
             _scrollMultiplier = Math.Max(0.25f, Math.Min(3.0f, scrollMultiplier));
             _vibrationEnabled = vibrationEnabled;
@@ -106,6 +109,7 @@ namespace XboxBatteryMonitor.Desktop
             _prevMiddleClick = false;
             _prevLtDown = false;
             _prevRtDown = false;
+            _comboHandled = false;
             _prevButtons = 0;
             _scrollAccumY = 0;
             _scrollAccumX = 0;
@@ -128,6 +132,25 @@ namespace XboxBatteryMonitor.Desktop
             bool rtDown = gp.bRightTrigger > TRIGGER_THRESHOLD;
             bool ltPressed = ltDown && !_prevLtDown;
             bool rtPressed = rtDown && !_prevRtDown;
+
+            // Global toggle combo: View (Back) + Menu (Start)
+            bool bothCombo = (gp.wButtons & (BTN_BACK | BTN_START)) == (BTN_BACK | BTN_START);
+            if (bothCombo)
+            {
+                if (!_comboHandled && _onToggleCombo != null)
+                {
+                    _comboHandled = true;
+                    RunOnUi(_onToggleCombo);
+                }
+                _prevButtons = gp.wButtons;
+                _prevLtDown = ltDown;
+                _prevRtDown = rtDown;
+                return;
+            }
+            if ((gp.wButtons & (BTN_BACK | BTN_START)) == 0)
+            {
+                _comboHandled = false;
+            }
 
             if (_osdKeyboard != null && _osdKeyboard.Visible)
             {
@@ -239,6 +262,13 @@ namespace XboxBatteryMonitor.Desktop
             if (ltDown && _bindings.ActLT == target) return true;
             if (rtDown && _bindings.ActRT == target) return true;
             return false;
+        }
+
+        public static bool IsToggleComboPressed()
+        {
+            NativeMethods.XINPUT_STATE state = new NativeMethods.XINPUT_STATE();
+            if (NativeMethods.XInputGetState(0, ref state) != NativeMethods.ERROR_SUCCESS) return false;
+            return (state.Gamepad.wButtons & (BTN_BACK | BTN_START)) == (BTN_BACK | BTN_START);
         }
 
         private void TriggerDiscreteAction(DesktopAction action)

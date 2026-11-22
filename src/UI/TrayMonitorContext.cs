@@ -17,6 +17,7 @@ namespace XboxBatteryMonitor.UI
         private readonly System.Windows.Forms.Timer _pollTimer;
         private readonly System.Windows.Forms.Timer _idleCheckTimer;
         private readonly System.Windows.Forms.Timer _hideTimer;
+        private readonly System.Windows.Forms.Timer _comboTimer;
         private readonly OsdKeyboardForm _osdKeyboard;
         private readonly DesktopController _desktopController;
         private readonly AppSettings _settings;
@@ -27,6 +28,7 @@ namespace XboxBatteryMonitor.UI
         private readonly int?[] _lastPercent = new int?[4];
         private readonly bool[] _isChargingInferred = new bool[4];
         private bool _wasConnected = false;
+        private bool _comboWasPressed = false;
         private bool? _lastPrimaryWired = null;
         private bool _pendingPostConnectRefresh = false;
         private bool _desktopModeEnabled = false;
@@ -45,13 +47,14 @@ namespace XboxBatteryMonitor.UI
                 _osdKeyboard,
                 SynchronizationContext.Current,
                 _settings.Bindings,
+                () => ToggleDesktopFromCombo(),
                 _settings.CursorSensitivity / 100.0f,
                 _settings.ScrollSpeed / 100.0f,
                 _settings.OsdVibration);
 
             ContextMenuStrip menu = new ContextMenuStrip();
             menu.Items.Add("Show Controller Details", null, (s, e) => ShowDetails());
-            _desktopMenuItem = new ToolStripMenuItem("Desktop Control (Steam Layout)");
+            _desktopMenuItem = new ToolStripMenuItem("Desktop Control (View + Menu)");
             _desktopMenuItem.CheckOnClick = true;
             _desktopMenuItem.Click += (s, e) => ToggleDesktopMode(_desktopMenuItem.Checked);
             menu.Items.Add(_desktopMenuItem);
@@ -112,6 +115,27 @@ namespace XboxBatteryMonitor.UI
                 }
             };
 
+            // Lightweight 150ms check for View + Menu toggle combo when Desktop Control is OFF
+            _comboTimer = new System.Windows.Forms.Timer { Interval = 150 };
+            _comboTimer.Tick += (s, e) =>
+            {
+                if (!_wasConnected || _desktopModeEnabled)
+                {
+                    _comboWasPressed = false;
+                    return;
+                }
+                bool down = DesktopController.IsToggleComboPressed();
+                if (down && !_comboWasPressed)
+                {
+                    _comboWasPressed = true;
+                    ToggleDesktopFromCombo();
+                }
+                else if (!down)
+                {
+                    _comboWasPressed = false;
+                }
+            };
+
             UpdateStatus(checkAlerts: !testMode);
 
             if (testMode)
@@ -135,6 +159,7 @@ namespace XboxBatteryMonitor.UI
                 }
 
                 _pollTimer.Stop();
+                _comboTimer.Stop();
                 StopDesktopThread();
                 _lastPrimaryWired = null;
                 _pendingPostConnectRefresh = false;
@@ -173,6 +198,7 @@ namespace XboxBatteryMonitor.UI
             _wasConnected = true;
             _idleCheckTimer.Stop();
             if (!_pollTimer.Enabled) _pollTimer.Start();
+            if (!_desktopModeEnabled && !_comboTimer.Enabled) _comboTimer.Start();
             if (_desktopModeEnabled && !_desktopThreadRunning) StartDesktopThread();
 
             foreach (var c in controllers)
@@ -310,11 +336,25 @@ namespace XboxBatteryMonitor.UI
             _desktopController.Reset();
         }
 
+        private void ToggleDesktopFromCombo()
+        {
+            bool next = !_desktopModeEnabled;
+            _desktopMenuItem.Checked = next;
+            ToggleDesktopMode(next);
+            DesktopController.PulseVibration(next ? (ushort)12000 : (ushort)6000, next ? (ushort)22000 : (ushort)10000, next ? 70 : 45);
+            _trayIcon.ShowBalloonTip(
+                3000,
+                "Xbox Desktop Control",
+                next ? "Desktop Control: ON (View + Menu to toggle)" : "Desktop Control: OFF",
+                ToolTipIcon.None);
+        }
+
         private void ToggleDesktopMode(bool enabled)
         {
             _desktopModeEnabled = enabled;
             if (enabled && _wasConnected)
             {
+                _comboTimer.Stop();
                 bool osdOpen = (_osdKeyboard != null && _osdKeyboard.Visible);
                 _steamPausedDesktop = !osdOpen && (FocusDetector.IsSteamDesktopLayoutActive() || FocusDetector.IsFullscreenOrBorderlessAppFocused() || FocusDetector.IsUwpGamepadAppFocused());
                 StartDesktopThread();
@@ -322,6 +362,7 @@ namespace XboxBatteryMonitor.UI
             else
             {
                 StopDesktopThread();
+                if (_wasConnected && !_comboTimer.Enabled) _comboTimer.Start();
             }
             if (_layoutForm != null && !_layoutForm.IsDisposed && _layoutForm.Visible)
             {
@@ -526,6 +567,7 @@ namespace XboxBatteryMonitor.UI
             _pollTimer.Stop();
             _idleCheckTimer.Stop();
             _hideTimer.Stop();
+            _comboTimer.Stop();
             StopDesktopThread();
             _trayIcon.Visible = false;
             if (_currentHIcon != IntPtr.Zero)
