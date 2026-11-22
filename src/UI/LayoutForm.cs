@@ -9,6 +9,15 @@ namespace XboxBatteryMonitor.UI
 {
     internal class LayoutForm : Form
     {
+        private class BufferedCanvas : Panel
+        {
+            public BufferedCanvas()
+            {
+                DoubleBuffered = true;
+                ResizeRedraw = true;
+            }
+        }
+
         private class CalloutRegion
         {
             public string Key;
@@ -45,7 +54,7 @@ namespace XboxBatteryMonitor.UI
             Font = new Font("Segoe UI Variable Text", 9f);
             DoubleBuffered = true;
 
-            _canvas = new Panel
+            _canvas = new BufferedCanvas
             {
                 Location = new Point(0, 0),
                 Size = new Size(760, 404),

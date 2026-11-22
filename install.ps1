@@ -43,3 +43,16 @@ $shortcut.Description = 'Xbox Controller Battery Monitor'
 $shortcut.Save()
 
 Write-Host "Built $exePath and registered Startup shortcut."
+
+# Launch in the user's interactive desktop session (detached from terminal job object)
+$launchTask = 'XboxBatteryMonitor_OneShotLaunch'
+$prevPref2 = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+schtasks.exe /Create /TN $launchTask /TR "`"$exePath`"" /SC ONCE /ST 00:00 /F 2>$null | Out-Null
+schtasks.exe /Run /TN $launchTask 2>$null | Out-Null
+Start-Sleep -Seconds 2
+schtasks.exe /Delete /TN $launchTask /F 2>$null | Out-Null
+$ErrorActionPreference = $prevPref2
+
+Get-Process XboxBatteryMonitor -ErrorAction SilentlyContinue |
+    Select-Object Name, Id, @{N='RAM_MB';E={[math]::Round($_.WorkingSet64 / 1MB, 1)}}
