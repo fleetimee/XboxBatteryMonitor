@@ -1050,17 +1050,37 @@ namespace XboxBatteryMonitor
                     try
                     {
                         Stopwatch sw = Stopwatch.StartNew();
-                        Stopwatch pauseCheckSw = Stopwatch.StartNew();
+                        Stopwatch steamCheckSw = Stopwatch.StartNew();
+                        IntPtr lastHwnd = IntPtr.Zero;
+                        bool lastWindowPaused = false;
+                        bool lastSteamPaused = IsSteamDesktopLayoutActive();
+                        bool lastOsdOpen = false;
+
                         while (_desktopThreadRunning)
                         {
                             double dt = sw.Elapsed.TotalSeconds;
                             sw.Restart();
 
-                            if (pauseCheckSw.ElapsedMilliseconds >= 100)
+                            bool osdOpen = (_osdKeyboard != null && _osdKeyboard.Visible);
+                            IntPtr fgHwnd = GetForegroundWindow();
+
+                            // Only inspect foreground process when active window actually changes (zero hitching during movement)
+                            if (fgHwnd != lastHwnd)
                             {
-                                pauseCheckSw.Restart();
-                                bool osdOpen = (_osdKeyboard != null && _osdKeyboard.Visible);
-                                bool shouldPause = !osdOpen && (IsSteamDesktopLayoutActive() || IsFullscreenOrBorderlessAppFocused() || IsUwpGamepadAppFocused());
+                                lastHwnd = fgHwnd;
+                                lastWindowPaused = IsFullscreenOrBorderlessAppFocused() || IsUwpGamepadAppFocused();
+                            }
+
+                            if (steamCheckSw.ElapsedMilliseconds >= 2000)
+                            {
+                                steamCheckSw.Restart();
+                                lastSteamPaused = IsSteamDesktopLayoutActive();
+                            }
+
+                            if (osdOpen != lastOsdOpen || ((lastWindowPaused || lastSteamPaused) && !osdOpen) != _steamPausedDesktop)
+                            {
+                                lastOsdOpen = osdOpen;
+                                bool shouldPause = !osdOpen && (lastSteamPaused || lastWindowPaused);
                                 if (shouldPause != _steamPausedDesktop)
                                 {
                                     _steamPausedDesktop = shouldPause;
