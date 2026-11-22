@@ -529,6 +529,7 @@ namespace XboxBatteryMonitor
 
             private readonly OsdKeyboardForm _osdKeyboard;
             private readonly SynchronizationContext _uiContext;
+            private volatile float _sensitivityMultiplier = 1.0f;
             private bool _prevLeftClick = false;
             private bool _prevRightClick = false;
             private bool _prevMiddleClick = false;
@@ -539,10 +540,17 @@ namespace XboxBatteryMonitor
             private double _cursorAccumY = 0;
             private long _lastNavTickMs = 0;
 
-            public DesktopController(OsdKeyboardForm osdKeyboard = null, SynchronizationContext uiContext = null)
+            public DesktopController(OsdKeyboardForm osdKeyboard = null, SynchronizationContext uiContext = null, float sensitivityMultiplier = 1.0f)
             {
                 _osdKeyboard = osdKeyboard;
                 _uiContext = uiContext;
+                _sensitivityMultiplier = Math.Max(0.25f, Math.Min(3.0f, sensitivityMultiplier));
+            }
+
+            public float SensitivityMultiplier
+            {
+                get { return _sensitivityMultiplier; }
+                set { _sensitivityMultiplier = Math.Max(0.25f, Math.Min(3.0f, value)); }
             }
 
             private void RunOnUi(Action action)
@@ -638,8 +646,8 @@ namespace XboxBatteryMonitor
                     return;
                 }
 
-                // 1. Left Stick -> Mouse Cursor (sub-pixel accumulation + delta-time)
-                MoveCursorFromStick(gp.sThumbLX, gp.sThumbLY, dtSeconds);
+                // 1. Left Stick -> Mouse Cursor (sub-pixel accumulation + delta-time + configurable sensitivity)
+                MoveCursorFromStick(gp.sThumbLX, gp.sThumbLY, dtSeconds, _sensitivityMultiplier);
 
                 // 2. Right Stick -> Mouse Scroll Wheel
                 ScrollFromStick(gp.sThumbRX, gp.sThumbRY, dtSeconds);
@@ -700,7 +708,7 @@ namespace XboxBatteryMonitor
                 if (now != prev) SendKey(vk, !now);
             }
 
-            internal static Point ComputeStickCursorDelta(short rawX, short rawY, double dtSeconds, ref double accumX, ref double accumY)
+            internal static Point ComputeStickCursorDelta(short rawX, short rawY, double dtSeconds, ref double accumX, ref double accumY, double sensitivityMultiplier = 1.0)
             {
                 double mag = Math.Sqrt((double)rawX * rawX + (double)rawY * rawY);
                 if (mag <= STICK_DEADZONE)
@@ -712,7 +720,7 @@ namespace XboxBatteryMonitor
 
                 double normMag = Math.Min(1.0, (mag - STICK_DEADZONE) / (32767.0 - STICK_DEADZONE));
                 // Blended linear+quadratic curve (px/sec): fine precision near deadzone, fast at full tilt
-                double pxPerSec = (0.20 * normMag + 0.80 * normMag * normMag) * 1200.0;
+                double pxPerSec = (0.20 * normMag + 0.80 * normMag * normMag) * 1200.0 * sensitivityMultiplier;
                 double step = pxPerSec * Math.Min(dtSeconds, 0.05);
 
                 accumX += (rawX / mag) * step;
@@ -741,9 +749,9 @@ namespace XboxBatteryMonitor
                 return 0;
             }
 
-            private void MoveCursorFromStick(short rawX, short rawY, double dtSeconds)
+            private void MoveCursorFromStick(short rawX, short rawY, double dtSeconds, double sensitivityMultiplier)
             {
-                Point delta = ComputeStickCursorDelta(rawX, rawY, dtSeconds, ref _cursorAccumX, ref _cursorAccumY);
+                Point delta = ComputeStickCursorDelta(rawX, rawY, dtSeconds, ref _cursorAccumX, ref _cursorAccumY, sensitivityMultiplier);
                 if (delta.X == 0 && delta.Y == 0) return;
 
                 INPUT[] inp = new INPUT[1];
@@ -837,7 +845,7 @@ namespace XboxBatteryMonitor
             public MonitorContext(bool testMode)
             {
                 _osdKeyboard = new OsdKeyboardForm();
-                _desktopController = new DesktopController(_osdKeyboard, SynchronizationContext.Current);
+                _desktopController = new DesktopController(_osdKeyboard, SynchronizationContext.Current, LoadSensitivityPercent() / 100.0f);
 
                 ContextMenuStrip menu = new ContextMenuStrip();
                 menu.Items.Add("Show Controller Details", null, (s, e) => ShowDetails());
@@ -1280,6 +1288,32 @@ namespace XboxBatteryMonitor
                 _trayIcon.ShowBalloonTip(6000, "Xbox Battery Monitor", msg, ToolTipIcon.Info);
             }
 
+            private static int LoadSensitivityPercent()
+            {
+                try
+                {
+                    object val = Microsoft.Win32.Registry.GetValue(
+                        @"HKEY_CURRENT_USER\Software\XboxBatteryMonitor", "CursorSensitivity", 100);
+                    if (val is int)
+                    {
+                        int pct = (int)val;
+                        return Math.Max(25, Math.Min(300, pct));
+                    }
+                }
+                catch { }
+                return 100;
+            }
+
+            private static void SaveSensitivityPercent(int pct)
+            {
+                try
+                {
+                    Microsoft.Win32.Registry.SetValue(
+                        @"HKEY_CURRENT_USER\Software\XboxBatteryMonitor", "CursorSensitivity", pct, Microsoft.Win32.RegistryValueKind.DWord);
+                }
+                catch { }
+            }
+
             private void ShowDetails()
             {
                 if (_detailsForm == null || _detailsForm.IsDisposed)
@@ -1287,7 +1321,13 @@ namespace XboxBatteryMonitor
                     _detailsForm = new DetailsForm(
                         () => GetConnectedControllers(),
                         () => ShowTestNotification(),
-                        () => ShowLayoutMap());
+                        () => ShowLayoutMap(),
+                        () => (int)Math.Round(_desktopController.SensitivityMultiplier * 100),
+                        pct =>
+                        {
+                            _desktopController.SensitivityMultiplier = pct / 100.0f;
+                            SaveSensitivityPercent(pct);
+                        });
                 }
 
                 var list = GetConnectedControllers();
@@ -1571,22 +1611,136 @@ namespace XboxBatteryMonitor
             }
         }
 
+        private class FluentSlider : Control
+        {
+            private int _min = 25;
+            private int _max = 300;
+            private int _value = 100;
+            private bool _dragging = false;
+
+            public event Action<int> ValueChanged;
+
+            public int Minimum { get { return _min; } set { _min = value; Invalidate(); } }
+            public int Maximum { get { return _max; } set { _max = value; Invalidate(); } }
+            public int Value
+            {
+                get { return _value; }
+                set
+                {
+                    int clamped = Math.Max(_min, Math.Min(_max, value));
+                    if (clamped != _value)
+                    {
+                        _value = clamped;
+                        Invalidate();
+                    }
+                }
+            }
+
+            public FluentSlider()
+            {
+                DoubleBuffered = true;
+                Cursor = Cursors.Hand;
+                Height = 22;
+            }
+
+            private void UpdateFromMouse(int mouseX)
+            {
+                float pad = 8f;
+                float usable = Math.Max(1f, Width - pad * 2);
+                float ratio = Math.Max(0f, Math.Min(1f, (mouseX - pad) / usable));
+                int newVal = _min + (int)Math.Round(ratio * (_max - _min));
+                // Snap to nearest 5% for clean feel
+                newVal = Math.Max(_min, Math.Min(_max, ((newVal + 2) / 5) * 5));
+                if (newVal != _value)
+                {
+                    _value = newVal;
+                    Invalidate();
+                    if (ValueChanged != null) ValueChanged(_value);
+                }
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left) { _dragging = true; UpdateFromMouse(e.X); }
+                base.OnMouseDown(e);
+            }
+
+            protected override void OnMouseMove(MouseEventArgs e)
+            {
+                if (_dragging) UpdateFromMouse(e.X);
+                base.OnMouseMove(e);
+            }
+
+            protected override void OnMouseUp(MouseEventArgs e)
+            {
+                _dragging = false;
+                base.OnMouseUp(e);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                Graphics g = e.Graphics;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+
+                float pad = 8f;
+                float trackH = 4f;
+                float trackY = (Height - trackH) / 2f;
+                float usable = Math.Max(1f, Width - pad * 2);
+                float ratio = (_value - _min) / (float)Math.Max(1, _max - _min);
+                float thumbX = pad + ratio * usable;
+
+                using (GraphicsPath trackPath = MonitorContext.CreateRoundedRect(new RectangleF(pad, trackY, usable, trackH), 2f))
+                using (SolidBrush trackBrush = new SolidBrush(Color.FromArgb(66, 66, 72)))
+                {
+                    g.FillPath(trackBrush, trackPath);
+                }
+
+                if (thumbX > pad)
+                {
+                    using (GraphicsPath fillPath = MonitorContext.CreateRoundedRect(new RectangleF(pad, trackY, thumbX - pad, trackH), 2f))
+                    using (SolidBrush fillBrush = new SolidBrush(Color.FromArgb(0, 120, 212)))
+                    {
+                        g.FillPath(fillBrush, fillPath);
+                    }
+                }
+
+                float r = 7f;
+                using (SolidBrush outer = new SolidBrush(Color.White))
+                using (SolidBrush inner = new SolidBrush(Color.FromArgb(0, 120, 212)))
+                {
+                    g.FillEllipse(outer, thumbX - r, Height / 2f - r, r * 2, r * 2);
+                    g.FillEllipse(inner, thumbX - 3.5f, Height / 2f - 3.5f, 7f, 7f);
+                }
+            }
+        }
+
         private class DetailsForm : Form
         {
             private readonly Func<List<ControllerSnapshot>> _refreshProvider;
             private readonly Action _onTestNotify;
             private readonly Action _onShowLayout;
+            private readonly Func<int> _getSensitivity;
+            private readonly Action<int> _setSensitivity;
             private readonly Label _lblModel;
             private readonly Label _lblConnection;
             private readonly Label _lblBatteryValue;
             private readonly Label _lblBatterySub;
+            private readonly Label _lblSensValue;
+            private readonly FluentSlider _sensSlider;
             private readonly FluentProgressBar _progressBar;
 
-            public DetailsForm(Func<List<ControllerSnapshot>> refreshProvider, Action onTestNotify, Action onShowLayout)
+            public DetailsForm(
+                Func<List<ControllerSnapshot>> refreshProvider,
+                Action onTestNotify,
+                Action onShowLayout,
+                Func<int> getSensitivity,
+                Action<int> setSensitivity)
             {
                 _refreshProvider = refreshProvider;
                 _onTestNotify = onTestNotify;
                 _onShowLayout = onShowLayout;
+                _getSensitivity = getSensitivity;
+                _setSensitivity = setSensitivity;
 
                 Text = "Xbox Controller";
                 FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -1595,7 +1749,7 @@ namespace XboxBatteryMonitor
                 MinimizeBox = false;
                 AutoScaleMode = AutoScaleMode.Dpi;
                 StartPosition = FormStartPosition.Manual;
-                ClientSize = new Size(376, 224);
+                ClientSize = new Size(376, 290);
                 BackColor = Color.FromArgb(32, 32, 34);
                 ForeColor = Color.FromArgb(245, 245, 247);
                 Font = new Font("Segoe UI Variable Text", 9.5f);
@@ -1674,10 +1828,43 @@ namespace XboxBatteryMonitor
                 batteryCard.Controls.Add(_progressBar);
                 batteryCard.Controls.Add(_lblBatterySub);
 
+                FluentCard sensCard = new FluentCard
+                {
+                    Location = new Point(14, 176),
+                    Size = new Size(348, 58)
+                };
+
+                int initialSens = _getSensitivity();
+                _lblSensValue = new Label
+                {
+                    Text = string.Format("Desktop Cursor Sensitivity: {0}%", initialSens),
+                    Location = new Point(14, 8),
+                    Size = new Size(320, 18),
+                    Font = new Font("Segoe UI Variable Text", 8.75f, FontStyle.Bold),
+                    ForeColor = Color.FromArgb(220, 220, 228),
+                    BackColor = Color.Transparent
+                };
+
+                _sensSlider = new FluentSlider
+                {
+                    Location = new Point(12, 29),
+                    Size = new Size(324, 22),
+                    Minimum = 25,
+                    Maximum = 300,
+                    Value = initialSens
+                };
+                _sensSlider.ValueChanged += val =>
+                {
+                    _lblSensValue.Text = string.Format("Desktop Cursor Sensitivity: {0}%", val);
+                    _setSensitivity(val);
+                };
+                sensCard.Controls.Add(_lblSensValue);
+                sensCard.Controls.Add(_sensSlider);
+
                 FluentButton btnRefresh = new FluentButton
                 {
                     Text = "Refresh",
-                    Location = new Point(14, 180),
+                    Location = new Point(14, 246),
                     Size = new Size(78, 32),
                     ForeColor = Color.White
                 };
@@ -1686,7 +1873,7 @@ namespace XboxBatteryMonitor
                 FluentButton btnTest = new FluentButton
                 {
                     Text = "Test Alert",
-                    Location = new Point(98, 180),
+                    Location = new Point(98, 246),
                     Size = new Size(84, 32),
                     ForeColor = Color.White
                 };
@@ -1695,7 +1882,7 @@ namespace XboxBatteryMonitor
                 FluentButton btnLayout = new FluentButton
                 {
                     Text = "Layout",
-                    Location = new Point(188, 180),
+                    Location = new Point(188, 246),
                     Size = new Size(78, 32),
                     ForeColor = Color.White
                 };
@@ -1704,14 +1891,14 @@ namespace XboxBatteryMonitor
                 FluentButton btnClose = new FluentButton
                 {
                     Text = "Close",
-                    Location = new Point(284, 180),
+                    Location = new Point(284, 246),
                     Size = new Size(78, 32),
                     ForeColor = Color.White,
                     IsPrimary = true
                 };
                 btnClose.Click += (s, e) => Hide();
 
-                Controls.AddRange(new Control[] { headerCard, batteryCard, btnRefresh, btnTest, btnLayout, btnClose });
+                Controls.AddRange(new Control[] { headerCard, batteryCard, sensCard, btnRefresh, btnTest, btnLayout, btnClose });
 
                 FormClosing += (s, e) =>
                 {

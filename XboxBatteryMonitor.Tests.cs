@@ -120,6 +120,14 @@ namespace XboxBatteryMonitor.Tests
                 AssertTrue(Program.IsSteamXboxSupportEnabled("\"controller_xbox_support\" \"1\""), "Enabled with space should be true");
             });
 
+            Run("Cursor sensitivity multiplier scales speed proportionally", () =>
+            {
+                double ax1 = 0, ay1 = 0, ax2 = 0, ay2 = 0;
+                Point basePt = Program.DesktopController.ComputeStickCursorDelta(short.MaxValue, 0, 1.0 / 60.0, ref ax1, ref ay1, 1.0);
+                Point fastPt = Program.DesktopController.ComputeStickCursorDelta(short.MaxValue, 0, 1.0 / 60.0, ref ax2, ref ay2, 2.0);
+                AssertTrue(fastPt.X >= basePt.X * 2 - 1, "2.0x sensitivity should roughly double delta");
+            });
+
             Console.WriteLine();
             Console.WriteLine(string.Format("Tests passed: {0}, failed: {1}", _passed, _failed));
             return _failed == 0 ? 0 : 1;

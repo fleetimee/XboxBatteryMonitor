@@ -15,5 +15,6 @@ $tempXml = Join-Path $env:TEMP 'XboxBatteryMonitorTask.user.xml'
 
 if (Test-Path $exePath) { Remove-Item $exePath -Force }
 if (Test-Path $tempXml) { Remove-Item $tempXml -Force }
+Remove-Item -Path 'HKCU:\Software\XboxBatteryMonitor' -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host "XboxBatteryMonitor uninstalled and cleaned up."
