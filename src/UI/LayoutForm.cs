@@ -185,93 +185,134 @@ namespace XboxBatteryMonitor.UI
             }
 
             float cx = 380f;
-            float cy = 216f;
+            float cy = 224f;
 
-            using (SolidBrush trigBrush = new SolidBrush(Color.FromArgb(54, 54, 60)))
-            using (Pen trigPen = new Pen(Color.FromArgb(95, 95, 105), 1.5f))
+            // Curved Triggers (LT / RT) peeking above bumpers
+            using (SolidBrush trigBrush = new SolidBrush(Color.FromArgb(46, 48, 54)))
+            using (Pen trigPen = new Pen(Color.FromArgb(95, 100, 112), 1.4f))
             {
-                using (GraphicsPath lt = FluentTheme.CreateRoundedRect(new RectangleF(cx - 108, cy - 118, 44, 24), 6))
-                { g.FillPath(trigBrush, lt); g.DrawPath(trigPen, lt); }
-                using (GraphicsPath rt = FluentTheme.CreateRoundedRect(new RectangleF(cx + 64, cy - 118, 44, 24), 6))
-                { g.FillPath(trigBrush, rt); g.DrawPath(trigPen, rt); }
+                using (GraphicsPath lt = new GraphicsPath())
+                {
+                    lt.AddBezier(cx - 104, cy - 92, cx - 96, cy - 116, cx - 72, cy - 118, cx - 64, cy - 102);
+                    lt.AddLine(cx - 64, cy - 102, cx - 104, cy - 92);
+                    g.FillPath(trigBrush, lt);
+                    g.DrawPath(trigPen, lt);
+                }
+                using (GraphicsPath rt = new GraphicsPath())
+                {
+                    rt.AddBezier(cx + 104, cy - 92, cx + 96, cy - 116, cx + 72, cy - 118, cx + 64, cy - 102);
+                    rt.AddLine(cx + 64, cy - 102, cx + 104, cy - 92);
+                    g.FillPath(trigBrush, rt);
+                    g.DrawPath(trigPen, rt);
+                }
             }
 
-            using (SolidBrush bmpBrush = new SolidBrush(Color.FromArgb(62, 62, 68)))
-            using (Pen bmpPen = new Pen(Color.FromArgb(105, 105, 115), 1.5f))
+            // Curved Bumpers (LB / RB) hugging the upper shoulder
+            using (SolidBrush bmpBrush = new SolidBrush(Color.FromArgb(52, 54, 60)))
+            using (Pen bmpPen = new Pen(Color.FromArgb(115, 120, 132), 1.5f))
             {
-                using (GraphicsPath lb = FluentTheme.CreateRoundedRect(new RectangleF(cx - 116, cy - 90, 62, 18), 7))
-                { g.FillPath(bmpBrush, lb); g.DrawPath(bmpPen, lb); }
-                using (GraphicsPath rb = FluentTheme.CreateRoundedRect(new RectangleF(cx + 54, cy - 90, 62, 18), 7))
-                { g.FillPath(bmpBrush, rb); g.DrawPath(bmpPen, rb); }
+                using (GraphicsPath lb = new GraphicsPath())
+                {
+                    lb.AddBezier(cx - 118, cy - 72, cx - 108, cy - 96, cx - 72, cy - 104, cx - 46, cy - 94);
+                    lb.AddLine(cx - 46, cy - 94, cx - 50, cy - 84);
+                    lb.AddBezier(cx - 50, cy - 84, cx - 74, cy - 92, cx - 100, cy - 86, cx - 112, cy - 68);
+                    lb.CloseFigure();
+                    g.FillPath(bmpBrush, lb);
+                    g.DrawPath(bmpPen, lb);
+                }
+                using (GraphicsPath rb = new GraphicsPath())
+                {
+                    rb.AddBezier(cx + 118, cy - 72, cx + 108, cy - 96, cx + 72, cy - 104, cx + 46, cy - 94);
+                    rb.AddLine(cx + 46, cy - 94, cx + 50, cy - 84);
+                    rb.AddBezier(cx + 50, cy - 84, cx + 74, cy - 92, cx + 100, cy - 86, cx + 112, cy - 68);
+                    rb.CloseFigure();
+                    g.FillPath(bmpBrush, rb);
+                    g.DrawPath(bmpPen, rb);
+                }
             }
 
+            // Smooth Steam-style Xbox Controller Silhouette
             using (GraphicsPath body = new GraphicsPath())
             {
-                body.AddArc(cx - 132, cy - 76, 56, 56, 180, 90);
-                body.AddLine(cx - 104, cy - 76, cx + 104, cy - 76);
-                body.AddArc(cx + 76, cy - 76, 56, 56, 270, 90);
-                body.AddLine(cx + 132, cy - 48, cx + 148, cy + 66);
-                body.AddArc(cx + 96, cy + 44, 52, 52, 0, 155);
-                body.AddLine(cx + 106, cy + 88, cx + 62, cy + 46);
-                body.AddLine(cx + 62, cy + 46, cx - 62, cy + 46);
-                body.AddLine(cx - 62, cy + 46, cx - 106, cy + 88);
-                body.AddArc(cx - 148, cy + 44, 52, 52, 25, 155);
-                body.AddLine(cx - 148, cy + 66, cx - 132, cy - 48);
+                // Top center dip -> right shoulder -> right grip -> bottom arch -> left grip -> left shoulder
+                body.AddBezier(cx - 44, cy - 86, cx - 18, cy - 80, cx + 18, cy - 80, cx + 44, cy - 86);
+                body.AddBezier(cx + 44, cy - 86, cx + 88, cy - 92, cx + 124, cy - 68, cx + 136, cy - 22);
+                body.AddBezier(cx + 136, cy - 22, cx + 150, cy + 32, cx + 154, cy + 84, cx + 122, cy + 94);
+                body.AddBezier(cx + 122, cy + 94, cx + 96, cy + 100, cx + 76, cy + 62, cx + 52, cy + 44);
+                body.AddBezier(cx + 52, cy + 44, cx + 22, cy + 42, cx - 22, cy + 42, cx - 52, cy + 44);
+                body.AddBezier(cx - 52, cy + 44, cx - 76, cy + 62, cx - 96, cy + 100, cx - 122, cy + 94);
+                body.AddBezier(cx - 122, cy + 94, cx - 154, cy + 84, cx - 150, cy + 32, cx - 136, cy - 22);
+                body.AddBezier(cx - 136, cy - 22, cx - 124, cy - 68, cx - 88, cy - 92, cx - 44, cy - 86);
                 body.CloseFigure();
 
-                using (SolidBrush bodyBrush = new SolidBrush(Color.FromArgb(44, 44, 48)))
-                using (Pen bodyPen = new Pen(Color.FromArgb(110, 110, 120), 2f) { LineJoin = LineJoin.Round })
+                using (SolidBrush bodyBrush = new SolidBrush(Color.FromArgb(36, 38, 44)))
+                using (Pen bodyPen = new Pen(Color.FromArgb(120, 126, 138), 1.8f) { LineJoin = LineJoin.Round })
                 {
                     g.FillPath(bodyBrush, body);
                     g.DrawPath(bodyPen, body);
                 }
             }
 
-            using (SolidBrush guideBrush = new SolidBrush(Color.FromArgb(72, 72, 80)))
-            using (Pen guidePen = new Pen(Color.FromArgb(180, 180, 190), 1.5f))
+            // Xbox Guide Button with 'X' logo
+            using (SolidBrush guideBrush = new SolidBrush(Color.FromArgb(52, 56, 64)))
+            using (Pen guidePen = new Pen(Color.FromArgb(160, 168, 180), 1.5f))
+            using (Pen xPen = new Pen(Color.FromArgb(220, 226, 235), 2.0f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
-                g.FillEllipse(guideBrush, cx - 12, cy - 58, 24, 24);
-                g.DrawEllipse(guidePen, cx - 12, cy - 58, 24, 24);
+                g.FillEllipse(guideBrush, cx - 13, cy - 68, 26, 26);
+                g.DrawEllipse(guidePen, cx - 13, cy - 68, 26, 26);
+                g.DrawLine(xPen, cx - 6, cy - 61, cx + 6, cy - 49);
+                g.DrawLine(xPen, cx + 6, cy - 61, cx - 6, cy - 49);
             }
 
-            using (SolidBrush smallBtn = new SolidBrush(Color.FromArgb(80, 80, 88)))
+            // View (Back) & Menu (Start) buttons with subtle icons
+            using (SolidBrush smallBtn = new SolidBrush(Color.FromArgb(54, 58, 66)))
+            using (Pen smallPen = new Pen(Color.FromArgb(130, 136, 148), 1.2f))
             {
-                g.FillEllipse(smallBtn, cx - 36, cy - 30, 14, 14);
-                g.FillEllipse(smallBtn, cx + 22, cy - 30, 14, 14);
+                g.FillEllipse(smallBtn, cx - 35, cy - 32, 15, 15);
+                g.DrawEllipse(smallPen, cx - 35, cy - 32, 15, 15);
+                g.FillEllipse(smallBtn, cx + 20, cy - 32, 15, 15);
+                g.DrawEllipse(smallPen, cx + 20, cy - 32, 15, 15);
             }
 
-            DrawThumbstick(g, cx - 78, cy - 26, 20);
-            DrawThumbstick(g, cx + 42, cy + 12, 20);
+            // Asymmetric Thumbsticks (Left upper, Right lower)
+            DrawThumbstick(g, cx - 78, cy - 30, 21);
+            DrawThumbstick(g, cx + 40, cy + 12, 21);
 
-            using (SolidBrush dpadBrush = new SolidBrush(Color.FromArgb(68, 68, 74)))
-            using (Pen dpadPen = new Pen(Color.FromArgb(120, 120, 130), 1.2f))
+            // Circular Dish D-Pad with '+' cross
+            using (SolidBrush dishBrush = new SolidBrush(Color.FromArgb(44, 46, 54)))
+            using (Pen dishPen = new Pen(Color.FromArgb(95, 100, 112), 1.2f))
+            using (SolidBrush crossBrush = new SolidBrush(Color.FromArgb(74, 78, 88)))
+            using (Pen crossPen = new Pen(Color.FromArgb(135, 140, 152), 1.2f))
             {
-                g.FillRectangle(dpadBrush, cx - 48, cy - 4, 14, 38);
-                g.FillRectangle(dpadBrush, cx - 60, cy + 8, 38, 14);
-                g.DrawRectangle(dpadPen, cx - 48, cy - 4, 14, 38);
-                g.DrawRectangle(dpadPen, cx - 60, cy + 8, 38, 14);
+                g.FillEllipse(dishBrush, cx - 65, cy - 10, 48, 48);
+                g.DrawEllipse(dishPen, cx - 65, cy - 10, 48, 48);
+                g.FillRectangle(crossBrush, cx - 47, cy - 3, 12, 34);
+                g.FillRectangle(crossBrush, cx - 58, cy + 8, 34, 12);
+                g.DrawRectangle(crossPen, cx - 47, cy - 3, 12, 34);
+                g.DrawRectangle(crossPen, cx - 58, cy + 8, 34, 12);
             }
 
-            DrawFaceButton(g, cx + 78, cy - 46, "Y", Color.FromArgb(250, 204, 21));
-            DrawFaceButton(g, cx + 56, cy - 26, "X", Color.FromArgb(56, 189, 248));
-            DrawFaceButton(g, cx + 100, cy - 26, "B", Color.FromArgb(248, 113, 113));
-            DrawFaceButton(g, cx + 78, cy - 6, "A", Color.FromArgb(74, 222, 128));
+            // ABXY Face Buttons
+            DrawFaceButton(g, cx + 72, cy - 52, "Y", Color.FromArgb(250, 204, 21));
+            DrawFaceButton(g, cx + 52, cy - 32, "X", Color.FromArgb(56, 189, 248));
+            DrawFaceButton(g, cx + 92, cy - 32, "B", Color.FromArgb(248, 113, 113));
+            DrawFaceButton(g, cx + 72, cy - 12, "A", Color.FromArgb(74, 222, 128));
 
             // Left remappable callouts
-            DrawCallout(g, "LT", new PointF(cx - 86, cy - 106), new PointF(18, 66), "LT", ButtonBindings.ActionLabel(_bindings.Get("LT")), true);
-            DrawCallout(g, "LB", new PointF(cx - 86, cy - 81), new PointF(18, 114), "LB", ButtonBindings.ActionLabel(_bindings.Get("LB")), true);
-            DrawCallout(g, "L3", new PointF(cx - 78, cy - 14), new PointF(18, 168), "L3 (Stick Press)", ButtonBindings.ActionLabel(_bindings.Get("L3")), true);
-            DrawCallout(g, "View", new PointF(cx - 29, cy - 23), new PointF(18, 222), "View (Back)", ButtonBindings.ActionLabel(_bindings.Get("View")), true);
-            DrawCallout(g, "Menu", new PointF(cx + 29, cy - 23), new PointF(18, 276), "Menu (Start)", ButtonBindings.ActionLabel(_bindings.Get("Menu")), true);
+            DrawCallout(g, "LT", new PointF(cx - 84, cy - 106), new PointF(18, 66), "LT", ButtonBindings.ActionLabel(_bindings.Get("LT")), true);
+            DrawCallout(g, "LB", new PointF(cx - 84, cy - 86), new PointF(18, 114), "LB", ButtonBindings.ActionLabel(_bindings.Get("LB")), true);
+            DrawCallout(g, "L3", new PointF(cx - 78, cy - 30), new PointF(18, 168), "L3 (Stick Press)", ButtonBindings.ActionLabel(_bindings.Get("L3")), true);
+            DrawCallout(g, "View", new PointF(cx - 28, cy - 24), new PointF(18, 222), "View (Back)", ButtonBindings.ActionLabel(_bindings.Get("View")), true);
+            DrawCallout(g, "Menu", new PointF(cx + 28, cy - 24), new PointF(18, 276), "Menu (Start)", ButtonBindings.ActionLabel(_bindings.Get("Menu")), true);
 
             // Right remappable callouts
-            DrawCallout(g, "RT", new PointF(cx + 86, cy - 106), new PointF(568, 66), "RT", ButtonBindings.ActionLabel(_bindings.Get("RT")), false);
-            DrawCallout(g, "RB", new PointF(cx + 86, cy - 81), new PointF(568, 114), "RB", ButtonBindings.ActionLabel(_bindings.Get("RB")), false);
-            DrawCallout(g, "Y", new PointF(cx + 86, cy - 38), new PointF(568, 162), "Y", ButtonBindings.ActionLabel(_bindings.Get("Y")), false);
-            DrawCallout(g, "X", new PointF(cx + 64, cy - 18), new PointF(568, 210), "X", ButtonBindings.ActionLabel(_bindings.Get("X")), false);
-            DrawCallout(g, "B", new PointF(cx + 108, cy - 18), new PointF(568, 258), "B", ButtonBindings.ActionLabel(_bindings.Get("B")), false);
-            DrawCallout(g, "A", new PointF(cx + 86, cy + 2), new PointF(568, 306), "A", ButtonBindings.ActionLabel(_bindings.Get("A")), false);
-            DrawCallout(g, "R3", new PointF(cx + 42, cy + 12), new PointF(568, 354), "R3 (Stick Press)", ButtonBindings.ActionLabel(_bindings.Get("R3")), false);
+            DrawCallout(g, "RT", new PointF(cx + 84, cy - 106), new PointF(568, 66), "RT", ButtonBindings.ActionLabel(_bindings.Get("RT")), false);
+            DrawCallout(g, "RB", new PointF(cx + 84, cy - 86), new PointF(568, 114), "RB", ButtonBindings.ActionLabel(_bindings.Get("RB")), false);
+            DrawCallout(g, "Y", new PointF(cx + 80, cy - 44), new PointF(568, 162), "Y", ButtonBindings.ActionLabel(_bindings.Get("Y")), false);
+            DrawCallout(g, "X", new PointF(cx + 60, cy - 24), new PointF(568, 210), "X", ButtonBindings.ActionLabel(_bindings.Get("X")), false);
+            DrawCallout(g, "B", new PointF(cx + 100, cy - 24), new PointF(568, 258), "B", ButtonBindings.ActionLabel(_bindings.Get("B")), false);
+            DrawCallout(g, "A", new PointF(cx + 80, cy - 4), new PointF(568, 306), "A", ButtonBindings.ActionLabel(_bindings.Get("A")), false);
+            DrawCallout(g, "R3", new PointF(cx + 40, cy + 12), new PointF(568, 354), "R3 (Stick Press)", ButtonBindings.ActionLabel(_bindings.Get("R3")), false);
         }
 
         private static void DrawThumbstick(Graphics g, float x, float y, float radius)
