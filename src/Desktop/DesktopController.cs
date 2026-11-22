@@ -205,19 +205,19 @@ namespace XboxBatteryMonitor.Desktop
             SyncKey(gp.wButtons, DPAD_LEFT, 0x25);
             SyncKey(gp.wButtons, DPAD_RIGHT, 0x27);
 
-            // Edge-triggered remappable actions
-            if ((pressed & BTN_A) != 0) TriggerDiscreteAction(_bindings.Get("A"));
-            if ((pressed & BTN_B) != 0) TriggerDiscreteAction(_bindings.Get("B"));
-            if ((pressed & BTN_X) != 0) TriggerDiscreteAction(_bindings.Get("X"));
-            if ((pressed & BTN_Y) != 0) TriggerDiscreteAction(_bindings.Get("Y"));
-            if ((pressed & BTN_LB) != 0) TriggerDiscreteAction(_bindings.Get("LB"));
-            if ((pressed & BTN_RB) != 0) TriggerDiscreteAction(_bindings.Get("RB"));
-            if ((pressed & BTN_LS) != 0) TriggerDiscreteAction(_bindings.Get("L3"));
-            if ((pressed & BTN_RS) != 0) TriggerDiscreteAction(_bindings.Get("R3"));
-            if ((pressed & BTN_BACK) != 0) TriggerDiscreteAction(_bindings.Get("View"));
-            if ((pressed & BTN_START) != 0) TriggerDiscreteAction(_bindings.Get("Menu"));
-            if (ltPressed) TriggerDiscreteAction(_bindings.Get("LT"));
-            if (rtPressed) TriggerDiscreteAction(_bindings.Get("RT"));
+            // Edge-triggered remappable actions (zero-allocation cached fields)
+            if ((pressed & BTN_A) != 0) TriggerDiscreteAction(_bindings.ActA);
+            if ((pressed & BTN_B) != 0) TriggerDiscreteAction(_bindings.ActB);
+            if ((pressed & BTN_X) != 0) TriggerDiscreteAction(_bindings.ActX);
+            if ((pressed & BTN_Y) != 0) TriggerDiscreteAction(_bindings.ActY);
+            if ((pressed & BTN_LB) != 0) TriggerDiscreteAction(_bindings.ActLB);
+            if ((pressed & BTN_RB) != 0) TriggerDiscreteAction(_bindings.ActRB);
+            if ((pressed & BTN_LS) != 0) TriggerDiscreteAction(_bindings.ActL3);
+            if ((pressed & BTN_RS) != 0) TriggerDiscreteAction(_bindings.ActR3);
+            if ((pressed & BTN_BACK) != 0) TriggerDiscreteAction(_bindings.ActView);
+            if ((pressed & BTN_START) != 0) TriggerDiscreteAction(_bindings.ActMenu);
+            if (ltPressed) TriggerDiscreteAction(_bindings.ActLT);
+            if (rtPressed) TriggerDiscreteAction(_bindings.ActRT);
 
             _prevButtons = gp.wButtons;
             _prevLtDown = ltDown;
@@ -226,18 +226,18 @@ namespace XboxBatteryMonitor.Desktop
 
         private bool IsActionHeld(DesktopAction target, ushort buttons, bool ltDown, bool rtDown)
         {
-            if ((buttons & BTN_A) != 0 && _bindings.Get("A") == target) return true;
-            if ((buttons & BTN_B) != 0 && _bindings.Get("B") == target) return true;
-            if ((buttons & BTN_X) != 0 && _bindings.Get("X") == target) return true;
-            if ((buttons & BTN_Y) != 0 && _bindings.Get("Y") == target) return true;
-            if ((buttons & BTN_LB) != 0 && _bindings.Get("LB") == target) return true;
-            if ((buttons & BTN_RB) != 0 && _bindings.Get("RB") == target) return true;
-            if ((buttons & BTN_LS) != 0 && _bindings.Get("L3") == target) return true;
-            if ((buttons & BTN_RS) != 0 && _bindings.Get("R3") == target) return true;
-            if ((buttons & BTN_BACK) != 0 && _bindings.Get("View") == target) return true;
-            if ((buttons & BTN_START) != 0 && _bindings.Get("Menu") == target) return true;
-            if (ltDown && _bindings.Get("LT") == target) return true;
-            if (rtDown && _bindings.Get("RT") == target) return true;
+            if ((buttons & BTN_A) != 0 && _bindings.ActA == target) return true;
+            if ((buttons & BTN_B) != 0 && _bindings.ActB == target) return true;
+            if ((buttons & BTN_X) != 0 && _bindings.ActX == target) return true;
+            if ((buttons & BTN_Y) != 0 && _bindings.ActY == target) return true;
+            if ((buttons & BTN_LB) != 0 && _bindings.ActLB == target) return true;
+            if ((buttons & BTN_RB) != 0 && _bindings.ActRB == target) return true;
+            if ((buttons & BTN_LS) != 0 && _bindings.ActL3 == target) return true;
+            if ((buttons & BTN_RS) != 0 && _bindings.ActR3 == target) return true;
+            if ((buttons & BTN_BACK) != 0 && _bindings.ActView == target) return true;
+            if ((buttons & BTN_START) != 0 && _bindings.ActMenu == target) return true;
+            if (ltDown && _bindings.ActLT == target) return true;
+            if (rtDown && _bindings.ActRT == target) return true;
             return false;
         }
 

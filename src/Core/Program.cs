@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Windows.Forms;
 using XboxBatteryMonitor.UI;
@@ -10,6 +11,8 @@ namespace XboxBatteryMonitor.Core
         [STAThread]
         static void Main(string[] args)
         {
+            // Ensure Normal process priority even when launched via Task Scheduler
+            try { Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.Normal; } catch { }
             try { NativeMethods.SetProcessDpiAwarenessContext(new IntPtr(-4)); } // Per-Monitor V2
             catch { try { NativeMethods.SetProcessDPIAware(); } catch { } }
 

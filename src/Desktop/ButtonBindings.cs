@@ -33,9 +33,29 @@ namespace XboxBatteryMonitor.Desktop
 
         private readonly Dictionary<string, DesktopAction> _map = new Dictionary<string, DesktopAction>(StringComparer.OrdinalIgnoreCase);
 
+        public DesktopAction ActA;
+        public DesktopAction ActB;
+        public DesktopAction ActX;
+        public DesktopAction ActY;
+        public DesktopAction ActLB;
+        public DesktopAction ActRB;
+        public DesktopAction ActLT;
+        public DesktopAction ActRT;
+        public DesktopAction ActL3;
+        public DesktopAction ActR3;
+        public DesktopAction ActView;
+        public DesktopAction ActMenu;
+
         public ButtonBindings()
         {
             ResetDefaults();
+        }
+
+        private void SyncCache()
+        {
+            ActA = Get("A"); ActB = Get("B"); ActX = Get("X"); ActY = Get("Y");
+            ActLB = Get("LB"); ActRB = Get("RB"); ActLT = Get("LT"); ActRT = Get("RT");
+            ActL3 = Get("L3"); ActR3 = Get("R3"); ActView = Get("View"); ActMenu = Get("Menu");
         }
 
         public void ResetDefaults()
@@ -52,6 +72,7 @@ namespace XboxBatteryMonitor.Desktop
             _map["R3"] = DesktopAction.Enter;
             _map["View"] = DesktopAction.AltTab;
             _map["Menu"] = DesktopAction.Escape;
+            SyncCache();
         }
 
         public DesktopAction Get(string buttonKey)
@@ -63,6 +84,7 @@ namespace XboxBatteryMonitor.Desktop
         public void Set(string buttonKey, DesktopAction action)
         {
             _map[buttonKey] = action;
+            SyncCache();
         }
 
         public void LoadFromRegistry(string regKey)
@@ -84,6 +106,7 @@ namespace XboxBatteryMonitor.Desktop
                 }
                 catch { }
             }
+            SyncCache();
         }
 
         public void SaveToRegistry(string regKey)
