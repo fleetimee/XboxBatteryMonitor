@@ -1056,7 +1056,7 @@ namespace XboxBatteryMonitor
                             double dt = sw.Elapsed.TotalSeconds;
                             sw.Restart();
 
-                            if (pauseCheckSw.ElapsedMilliseconds >= 400)
+                            if (pauseCheckSw.ElapsedMilliseconds >= 100)
                             {
                                 pauseCheckSw.Restart();
                                 bool osdOpen = (_osdKeyboard != null && _osdKeyboard.Visible);
@@ -1125,6 +1125,13 @@ namespace XboxBatteryMonitor
                 {
                     IntPtr hwnd = GetForegroundWindow();
                     if (hwnd == IntPtr.Zero) return false;
+
+                    StringBuilder cls = new StringBuilder(64);
+                    GetClassName(hwnd, cls, cls.Capacity);
+                    if (cls.ToString().Equals("Windows.UI.Core.CoreWindow", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
 
                     uint pid;
                     GetWindowThreadProcessId(hwnd, out pid);
