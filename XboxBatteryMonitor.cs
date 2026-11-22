@@ -1138,6 +1138,8 @@ namespace XboxBatteryMonitor
                             || name.Equals("ShellExperienceHost", StringComparison.OrdinalIgnoreCase)
                             || name.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase)
                             || name.Equals("SystemSettings", StringComparison.OrdinalIgnoreCase)
+                            || name.Equals("WindowsTerminal", StringComparison.OrdinalIgnoreCase)
+                            || name.Equals("WinStore.App", StringComparison.OrdinalIgnoreCase)
                             || name.Equals("GameBar", StringComparison.OrdinalIgnoreCase);
                     }
                 }
