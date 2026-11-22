@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using XboxBatteryMonitor.Desktop;
 
 namespace XboxBatteryMonitor.Core
 {
@@ -13,6 +14,7 @@ namespace XboxBatteryMonitor.Core
         public int LowBatteryThreshold = 20;
         public bool OsdVibration = true;
         public bool MuteWhenSteamOpen = true;
+        public ButtonBindings Bindings = new ButtonBindings();
 
         public static AppSettings Load()
         {
@@ -22,6 +24,7 @@ namespace XboxBatteryMonitor.Core
             s.LowBatteryThreshold = ReadInt("LowBatteryThreshold", 20, 10, 30);
             s.OsdVibration = ReadInt("OsdVibration", 1, 0, 1) == 1;
             s.MuteWhenSteamOpen = ReadInt("MuteWhenSteamOpen", 1, 0, 1) == 1;
+            s.Bindings.LoadFromRegistry(RegKey);
             return s;
         }
 
@@ -34,6 +37,7 @@ namespace XboxBatteryMonitor.Core
                 Microsoft.Win32.Registry.SetValue(RegKey, "LowBatteryThreshold", LowBatteryThreshold, Microsoft.Win32.RegistryValueKind.DWord);
                 Microsoft.Win32.Registry.SetValue(RegKey, "OsdVibration", OsdVibration ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
                 Microsoft.Win32.Registry.SetValue(RegKey, "MuteWhenSteamOpen", MuteWhenSteamOpen ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+                Bindings.SaveToRegistry(RegKey);
             }
             catch { }
         }

@@ -128,6 +128,19 @@ namespace XboxBatteryMonitor.Tests
                 AssertTrue(fastPt.X >= basePt.X * 2 - 1, "2.0x sensitivity should roughly double delta");
             });
 
+            Run("ButtonBindings defaults, custom remapping, and ResetDefaults work", () =>
+            {
+                var b = new ButtonBindings();
+                AssertEqual(DesktopAction.LeftClick, b.Get("A"), "Default A should be LeftClick");
+                AssertEqual(DesktopAction.ToggleOsdKeyboard, b.Get("X"), "Default X should be ToggleOsdKeyboard");
+
+                b.Set("Y", DesktopAction.VolumeUp);
+                AssertEqual(DesktopAction.VolumeUp, b.Get("Y"), "Remapped Y should be VolumeUp");
+
+                b.ResetDefaults();
+                AssertEqual(DesktopAction.Space, b.Get("Y"), "ResetDefaults should restore Y to Space");
+            });
+
             Console.WriteLine();
             Console.WriteLine(string.Format("Tests passed: {0}, failed: 0", _passed));
             return _failed == 0 ? 0 : 1;

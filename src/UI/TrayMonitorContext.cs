@@ -42,6 +42,7 @@ namespace XboxBatteryMonitor.UI
             _desktopController = new DesktopController(
                 _osdKeyboard,
                 SynchronizationContext.Current,
+                _settings.Bindings,
                 _settings.CursorSensitivity / 100.0f,
                 _settings.ScrollSpeed / 100.0f,
                 _settings.OsdVibration);
@@ -319,7 +320,9 @@ namespace XboxBatteryMonitor.UI
                     {
                         _desktopMenuItem.Checked = !_desktopMenuItem.Checked;
                         ToggleDesktopMode(_desktopMenuItem.Checked);
-                    });
+                    },
+                    _settings.Bindings,
+                    () => _settings.Save());
             }
             _layoutForm.RefreshStatus();
             if (!_layoutForm.Visible) _layoutForm.Show();

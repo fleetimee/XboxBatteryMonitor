@@ -29,12 +29,15 @@ namespace XboxBatteryMonitor.Desktop
 
         private readonly OsdKeyboardForm _osdKeyboard;
         private readonly SynchronizationContext _uiContext;
+        private readonly ButtonBindings _bindings;
         private volatile float _sensitivityMultiplier = 1.0f;
         private volatile float _scrollMultiplier = 1.0f;
         private volatile bool _vibrationEnabled = true;
         private bool _prevLeftClick = false;
         private bool _prevRightClick = false;
         private bool _prevMiddleClick = false;
+        private bool _prevLtDown = false;
+        private bool _prevRtDown = false;
         private ushort _prevButtons = 0;
         private double _scrollAccumY = 0;
         private double _scrollAccumX = 0;
@@ -42,10 +45,11 @@ namespace XboxBatteryMonitor.Desktop
         private double _cursorAccumY = 0;
         private long _lastNavTickMs = 0;
 
-        public DesktopController(OsdKeyboardForm osdKeyboard = null, SynchronizationContext uiContext = null, float sensitivityMultiplier = 1.0f, float scrollMultiplier = 1.0f, bool vibrationEnabled = true)
+        public DesktopController(OsdKeyboardForm osdKeyboard = null, SynchronizationContext uiContext = null, ButtonBindings bindings = null, float sensitivityMultiplier = 1.0f, float scrollMultiplier = 1.0f, bool vibrationEnabled = true)
         {
             _osdKeyboard = osdKeyboard;
             _uiContext = uiContext;
+            _bindings = bindings ?? new ButtonBindings();
             _sensitivityMultiplier = Math.Max(0.25f, Math.Min(3.0f, sensitivityMultiplier));
             _scrollMultiplier = Math.Max(0.25f, Math.Min(3.0f, scrollMultiplier));
             _vibrationEnabled = vibrationEnabled;
@@ -100,6 +104,8 @@ namespace XboxBatteryMonitor.Desktop
             _prevLeftClick = false;
             _prevRightClick = false;
             _prevMiddleClick = false;
+            _prevLtDown = false;
+            _prevRtDown = false;
             _prevButtons = 0;
             _scrollAccumY = 0;
             _scrollAccumX = 0;
@@ -118,16 +124,22 @@ namespace XboxBatteryMonitor.Desktop
 
             var gp = state.Gamepad;
             ushort pressed = (ushort)(gp.wButtons & ~_prevButtons);
-
-            if ((pressed & BTN_X) != 0 && _osdKeyboard != null)
-            {
-                RunOnUi(() => _osdKeyboard.ToggleFromController());
-                _prevButtons = gp.wButtons;
-                return;
-            }
+            bool ltDown = gp.bLeftTrigger > TRIGGER_THRESHOLD;
+            bool rtDown = gp.bRightTrigger > TRIGGER_THRESHOLD;
+            bool ltPressed = ltDown && !_prevLtDown;
+            bool rtPressed = rtDown && !_prevRtDown;
 
             if (_osdKeyboard != null && _osdKeyboard.Visible)
             {
+                if ((pressed & BTN_X) != 0)
+                {
+                    RunOnUi(() => _osdKeyboard.ToggleFromController());
+                    _prevButtons = gp.wButtons;
+                    _prevLtDown = ltDown;
+                    _prevRtDown = rtDown;
+                    return;
+                }
+
                 long nowMs = Environment.TickCount;
                 int navDx = 0, navDy = 0;
                 if ((pressed & DPAD_LEFT) != 0) navDx = -1;
@@ -157,46 +169,98 @@ namespace XboxBatteryMonitor.Desktop
                 if ((pressed & BTN_START) != 0 || (pressed & BTN_B) != 0) RunOnUi(() => _osdKeyboard.HideKeyboard());
 
                 _prevButtons = gp.wButtons;
+                _prevLtDown = ltDown;
+                _prevRtDown = rtDown;
                 return;
             }
 
             MoveCursorFromStick(gp.sThumbLX, gp.sThumbLY, dtSeconds, _sensitivityMultiplier);
             ScrollFromStick(gp.sThumbRX, gp.sThumbRY, dtSeconds, _scrollMultiplier);
 
-            bool leftDown = ((gp.wButtons & BTN_A) != 0) || (gp.bRightTrigger > TRIGGER_THRESHOLD);
+            // Holdable mouse buttons via dynamic bindings
+            bool leftDown = IsActionHeld(DesktopAction.LeftClick, gp.wButtons, ltDown, rtDown);
             if (leftDown != _prevLeftClick)
             {
                 SendMouseButton(leftDown ? NativeMethods.MOUSEEVENTF_LEFTDOWN : NativeMethods.MOUSEEVENTF_LEFTUP);
                 _prevLeftClick = leftDown;
             }
 
-            bool rightDown = ((gp.wButtons & BTN_B) != 0) || (gp.bLeftTrigger > TRIGGER_THRESHOLD);
+            bool rightDown = IsActionHeld(DesktopAction.RightClick, gp.wButtons, ltDown, rtDown);
             if (rightDown != _prevRightClick)
             {
                 SendMouseButton(rightDown ? NativeMethods.MOUSEEVENTF_RIGHTDOWN : NativeMethods.MOUSEEVENTF_RIGHTUP);
                 _prevRightClick = rightDown;
             }
 
-            bool midDown = (gp.wButtons & BTN_LS) != 0;
+            bool midDown = IsActionHeld(DesktopAction.MiddleClick, gp.wButtons, ltDown, rtDown);
             if (midDown != _prevMiddleClick)
             {
                 SendMouseButton(midDown ? NativeMethods.MOUSEEVENTF_MIDDLEDOWN : NativeMethods.MOUSEEVENTF_MIDDLEUP);
                 _prevMiddleClick = midDown;
             }
 
+            // D-Pad -> Arrow Keys
             SyncKey(gp.wButtons, DPAD_UP, 0x26);
             SyncKey(gp.wButtons, DPAD_DOWN, 0x28);
             SyncKey(gp.wButtons, DPAD_LEFT, 0x25);
             SyncKey(gp.wButtons, DPAD_RIGHT, 0x27);
 
-            if ((pressed & BTN_Y) != 0) SendKeyTap(0x20);
-            if ((pressed & BTN_START) != 0) SendKeyTap(0x1B);
-            if ((pressed & BTN_RS) != 0) SendKeyTap(0x0D);
-            if ((pressed & BTN_BACK) != 0) SendKeyCombo(0x12, 0x09);
-            if ((pressed & BTN_LB) != 0) SendKeyTap(0xA6);
-            if ((pressed & BTN_RB) != 0) SendKeyTap(0xA7);
+            // Edge-triggered remappable actions
+            if ((pressed & BTN_A) != 0) TriggerDiscreteAction(_bindings.Get("A"));
+            if ((pressed & BTN_B) != 0) TriggerDiscreteAction(_bindings.Get("B"));
+            if ((pressed & BTN_X) != 0) TriggerDiscreteAction(_bindings.Get("X"));
+            if ((pressed & BTN_Y) != 0) TriggerDiscreteAction(_bindings.Get("Y"));
+            if ((pressed & BTN_LB) != 0) TriggerDiscreteAction(_bindings.Get("LB"));
+            if ((pressed & BTN_RB) != 0) TriggerDiscreteAction(_bindings.Get("RB"));
+            if ((pressed & BTN_LS) != 0) TriggerDiscreteAction(_bindings.Get("L3"));
+            if ((pressed & BTN_RS) != 0) TriggerDiscreteAction(_bindings.Get("R3"));
+            if ((pressed & BTN_BACK) != 0) TriggerDiscreteAction(_bindings.Get("View"));
+            if ((pressed & BTN_START) != 0) TriggerDiscreteAction(_bindings.Get("Menu"));
+            if (ltPressed) TriggerDiscreteAction(_bindings.Get("LT"));
+            if (rtPressed) TriggerDiscreteAction(_bindings.Get("RT"));
 
             _prevButtons = gp.wButtons;
+            _prevLtDown = ltDown;
+            _prevRtDown = rtDown;
+        }
+
+        private bool IsActionHeld(DesktopAction target, ushort buttons, bool ltDown, bool rtDown)
+        {
+            if ((buttons & BTN_A) != 0 && _bindings.Get("A") == target) return true;
+            if ((buttons & BTN_B) != 0 && _bindings.Get("B") == target) return true;
+            if ((buttons & BTN_X) != 0 && _bindings.Get("X") == target) return true;
+            if ((buttons & BTN_Y) != 0 && _bindings.Get("Y") == target) return true;
+            if ((buttons & BTN_LB) != 0 && _bindings.Get("LB") == target) return true;
+            if ((buttons & BTN_RB) != 0 && _bindings.Get("RB") == target) return true;
+            if ((buttons & BTN_LS) != 0 && _bindings.Get("L3") == target) return true;
+            if ((buttons & BTN_RS) != 0 && _bindings.Get("R3") == target) return true;
+            if ((buttons & BTN_BACK) != 0 && _bindings.Get("View") == target) return true;
+            if ((buttons & BTN_START) != 0 && _bindings.Get("Menu") == target) return true;
+            if (ltDown && _bindings.Get("LT") == target) return true;
+            if (rtDown && _bindings.Get("RT") == target) return true;
+            return false;
+        }
+
+        private void TriggerDiscreteAction(DesktopAction action)
+        {
+            switch (action)
+            {
+                case DesktopAction.ToggleOsdKeyboard:
+                    if (_osdKeyboard != null) RunOnUi(() => _osdKeyboard.ToggleFromController());
+                    break;
+                case DesktopAction.Space: SendKeyTap(0x20); break;
+                case DesktopAction.Enter: SendKeyTap(0x0D); break;
+                case DesktopAction.Escape: SendKeyTap(0x1B); break;
+                case DesktopAction.Backspace: SendKeyTap(0x08); break;
+                case DesktopAction.Tab: SendKeyTap(0x09); break;
+                case DesktopAction.AltTab: SendKeyCombo(0x12, 0x09); break;
+                case DesktopAction.BrowserBack: SendKeyTap(0xA6); break;
+                case DesktopAction.BrowserForward: SendKeyTap(0xA7); break;
+                case DesktopAction.VolumeUp: SendKeyTap(0xAF); break;
+                case DesktopAction.VolumeDown: SendKeyTap(0xAE); break;
+                case DesktopAction.VolumeMute: SendKeyTap(0xAD); break;
+                case DesktopAction.MediaPlayPause: SendKeyTap(0xB3); break;
+            }
         }
 
         private void ReleaseHeldArrows()

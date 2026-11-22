@@ -1,23 +1,38 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using XboxBatteryMonitor.Desktop;
 
 namespace XboxBatteryMonitor.UI
 {
     internal class LayoutForm : Form
     {
+        private class CalloutRegion
+        {
+            public string Key;
+            public RectangleF Rect;
+        }
+
         private readonly Func<bool> _isEnabledProvider;
         private readonly Action _onToggle;
+        private readonly ButtonBindings _bindings;
+        private readonly Action _onBindingsChanged;
         private readonly FluentButton _btnToggle;
         private readonly Label _lblStatus;
+        private readonly Panel _canvas;
+        private readonly List<CalloutRegion> _regions = new List<CalloutRegion>();
+        private string _hoveredKey = null;
 
-        public LayoutForm(Func<bool> isEnabledProvider, Action onToggle)
+        public LayoutForm(Func<bool> isEnabledProvider, Action onToggle, ButtonBindings bindings, Action onBindingsChanged)
         {
             _isEnabledProvider = isEnabledProvider;
             _onToggle = onToggle;
+            _bindings = bindings;
+            _onBindingsChanged = onBindingsChanged;
 
-            Text = "Xbox Controller — Desktop Layout (Steam Reference)";
+            Text = "Xbox Controller — Desktop Layout (Click any button to remap)";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             ShowIcon = false;
             MaximizeBox = false;
@@ -30,20 +45,37 @@ namespace XboxBatteryMonitor.UI
             Font = new Font("Segoe UI Variable Text", 9f);
             DoubleBuffered = true;
 
-            Panel canvas = new Panel
+            _canvas = new Panel
             {
                 Location = new Point(0, 0),
                 Size = new Size(760, 404),
                 BackColor = Color.Transparent
             };
-            canvas.Paint += OnCanvasPaint;
+            _canvas.Paint += OnCanvasPaint;
+            _canvas.MouseMove += OnCanvasMouseMove;
+            _canvas.MouseLeave += (s, e) => { if (_hoveredKey != null) { _hoveredKey = null; _canvas.Cursor = Cursors.Default; _canvas.Invalidate(); } };
+            _canvas.MouseClick += OnCanvasMouseClick;
 
             _lblStatus = new Label
             {
                 Location = new Point(18, 416),
-                Size = new Size(380, 24),
+                Size = new Size(310, 24),
                 Font = new Font("Segoe UI Variable Text", 9.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(170, 170, 178)
+            };
+
+            FluentButton btnReset = new FluentButton
+            {
+                Text = "Reset Defaults",
+                Location = new Point(342, 412),
+                Size = new Size(118, 32),
+                ForeColor = Color.White
+            };
+            btnReset.Click += (s, e) =>
+            {
+                _bindings.ResetDefaults();
+                _onBindingsChanged();
+                _canvas.Invalidate();
             };
 
             _btnToggle = new FluentButton
@@ -64,7 +96,7 @@ namespace XboxBatteryMonitor.UI
             };
             btnClose.Click += (s, e) => Hide();
 
-            Controls.AddRange(new Control[] { canvas, _lblStatus, _btnToggle, btnClose });
+            Controls.AddRange(new Control[] { _canvas, _lblStatus, btnReset, _btnToggle, btnClose });
 
             FormClosing += (s, e) =>
             {
@@ -85,24 +117,75 @@ namespace XboxBatteryMonitor.UI
         public void RefreshStatus()
         {
             bool on = _isEnabledProvider();
-            _lblStatus.Text = on ? "Desktop Control: ON  (Auto-pauses in Steam / Fullscreen)" : "Desktop Control: OFF";
+            _lblStatus.Text = on ? "Desktop Control: ON" : "Desktop Control: OFF";
             _lblStatus.ForeColor = on ? Color.FromArgb(134, 239, 172) : Color.FromArgb(170, 170, 178);
             _btnToggle.Text = on ? "Disable Desktop Control" : "Enable Desktop Control";
+            _canvas.Invalidate();
+        }
+
+        private void OnCanvasMouseMove(object sender, MouseEventArgs e)
+        {
+            string hit = HitTestRegion(e.Location);
+            if (hit != _hoveredKey)
+            {
+                _hoveredKey = hit;
+                _canvas.Cursor = hit != null ? Cursors.Hand : Cursors.Default;
+                _canvas.Invalidate();
+            }
+        }
+
+        private void OnCanvasMouseClick(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            string key = HitTestRegion(e.Location);
+            if (key == null) return;
+
+            ContextMenuStrip picker = new ContextMenuStrip();
+            DesktopAction current = _bindings.Get(key);
+            foreach (DesktopAction act in Enum.GetValues(typeof(DesktopAction)))
+            {
+                DesktopAction captured = act;
+                ToolStripMenuItem item = new ToolStripMenuItem(ButtonBindings.ActionLabel(captured))
+                {
+                    Checked = (captured == current)
+                };
+                item.Click += (s, ev) =>
+                {
+                    _bindings.Set(key, captured);
+                    _onBindingsChanged();
+                    _canvas.Invalidate();
+                };
+                picker.Items.Add(item);
+            }
+            picker.Show(_canvas, e.Location);
+        }
+
+        private string HitTestRegion(Point pt)
+        {
+            for (int i = 0; i < _regions.Count; i++)
+            {
+                if (_regions[i].Rect.Contains(pt)) return _regions[i].Key;
+            }
+            return null;
         }
 
         private void OnCanvasPaint(object sender, PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            _regions.Clear();
 
             using (Font titleFont = new Font("Segoe UI Variable Display", 12f, FontStyle.Bold))
+            using (Font subFont = new Font("Segoe UI Variable Text", 8.5f))
             using (SolidBrush titleBrush = new SolidBrush(Color.White))
+            using (SolidBrush subBrush = new SolidBrush(Color.FromArgb(150, 150, 160)))
             {
-                g.DrawString("Official Steam Desktop Layout (Xbox Controller)", titleFont, titleBrush, 18, 14);
+                g.DrawString("Desktop Layout — Click any button card to remap", titleFont, titleBrush, 18, 12);
+                g.DrawString("Left Stick: Mouse Cursor   •   Right Stick: Scroll Wheel   •   D-Pad: Arrow Keys", subFont, subBrush, 18, 36);
             }
 
             float cx = 380f;
-            float cy = 212f;
+            float cy = 216f;
 
             using (SolidBrush trigBrush = new SolidBrush(Color.FromArgb(54, 54, 60)))
             using (Pen trigPen = new Pen(Color.FromArgb(95, 95, 105), 1.5f))
@@ -174,21 +257,21 @@ namespace XboxBatteryMonitor.UI
             DrawFaceButton(g, cx + 100, cy - 26, "B", Color.FromArgb(248, 113, 113));
             DrawFaceButton(g, cx + 78, cy - 6, "A", Color.FromArgb(74, 222, 128));
 
-            DrawCallout(g, new PointF(cx - 86, cy - 106), new PointF(18, 68), "LT", "Right Click", true);
-            DrawCallout(g, new PointF(cx - 86, cy - 81), new PointF(18, 114), "LB", "Browser Back", true);
-            DrawCallout(g, new PointF(cx - 78, cy - 26), new PointF(18, 168), "Left Stick", "Mouse Cursor", true);
-            DrawCallout(g, new PointF(cx - 78, cy - 14), new PointF(18, 214), "L3 (Press)", "Middle Click", true);
-            DrawCallout(g, new PointF(cx - 41, cy + 15), new PointF(18, 268), "D-Pad", "Arrow Keys", true);
-            DrawCallout(g, new PointF(cx - 29, cy - 23), new PointF(18, 322), "View (Back)", "Alt + Tab", true);
+            // Left remappable callouts
+            DrawCallout(g, "LT", new PointF(cx - 86, cy - 106), new PointF(18, 66), "LT", ButtonBindings.ActionLabel(_bindings.Get("LT")), true);
+            DrawCallout(g, "LB", new PointF(cx - 86, cy - 81), new PointF(18, 114), "LB", ButtonBindings.ActionLabel(_bindings.Get("LB")), true);
+            DrawCallout(g, "L3", new PointF(cx - 78, cy - 14), new PointF(18, 168), "L3 (Stick Press)", ButtonBindings.ActionLabel(_bindings.Get("L3")), true);
+            DrawCallout(g, "View", new PointF(cx - 29, cy - 23), new PointF(18, 222), "View (Back)", ButtonBindings.ActionLabel(_bindings.Get("View")), true);
+            DrawCallout(g, "Menu", new PointF(cx + 29, cy - 23), new PointF(18, 276), "Menu (Start)", ButtonBindings.ActionLabel(_bindings.Get("Menu")), true);
 
-            DrawCallout(g, new PointF(cx + 86, cy - 106), new PointF(568, 68), "RT", "Left Click", false);
-            DrawCallout(g, new PointF(cx + 86, cy - 81), new PointF(568, 114), "RB", "Browser Forward", false);
-            DrawCallout(g, new PointF(cx + 86, cy - 38), new PointF(568, 160), "Y", "Space", false);
-            DrawCallout(g, new PointF(cx + 64, cy - 18), new PointF(568, 206), "X", "On-Screen Keyboard", false);
-            DrawCallout(g, new PointF(cx + 108, cy - 18), new PointF(568, 252), "B", "Right Click", false);
-            DrawCallout(g, new PointF(cx + 86, cy + 2), new PointF(568, 298), "A", "Left Click", false);
-            DrawCallout(g, new PointF(cx + 52, cy + 22), new PointF(568, 344), "Right Stick / R3", "Scroll / Enter", false);
-            DrawCallout(g, new PointF(cx + 29, cy - 23), new PointF(305, 368), "Menu (Start)", "Esc", false, isBottomCenter: true);
+            // Right remappable callouts
+            DrawCallout(g, "RT", new PointF(cx + 86, cy - 106), new PointF(568, 66), "RT", ButtonBindings.ActionLabel(_bindings.Get("RT")), false);
+            DrawCallout(g, "RB", new PointF(cx + 86, cy - 81), new PointF(568, 114), "RB", ButtonBindings.ActionLabel(_bindings.Get("RB")), false);
+            DrawCallout(g, "Y", new PointF(cx + 86, cy - 38), new PointF(568, 162), "Y", ButtonBindings.ActionLabel(_bindings.Get("Y")), false);
+            DrawCallout(g, "X", new PointF(cx + 64, cy - 18), new PointF(568, 210), "X", ButtonBindings.ActionLabel(_bindings.Get("X")), false);
+            DrawCallout(g, "B", new PointF(cx + 108, cy - 18), new PointF(568, 258), "B", ButtonBindings.ActionLabel(_bindings.Get("B")), false);
+            DrawCallout(g, "A", new PointF(cx + 86, cy + 2), new PointF(568, 306), "A", ButtonBindings.ActionLabel(_bindings.Get("A")), false);
+            DrawCallout(g, "R3", new PointF(cx + 42, cy + 12), new PointF(568, 354), "R3 (Stick Press)", ButtonBindings.ActionLabel(_bindings.Get("R3")), false);
         }
 
         private static void DrawThumbstick(Graphics g, float x, float y, float radius)
@@ -216,19 +299,20 @@ namespace XboxBatteryMonitor.UI
             }
         }
 
-        private static void DrawCallout(Graphics g, PointF anchor, PointF boxPos, string btnName, string action, bool isLeft, bool isBottomCenter = false)
+        private void DrawCallout(Graphics g, string bindKey, PointF anchor, PointF boxPos, string btnName, string action, bool isLeft)
         {
-            float boxW = isBottomCenter ? 150f : 174f;
-            float boxH = 34f;
+            float boxW = 174f;
+            float boxH = 36f;
             RectangleF rect = new RectangleF(boxPos.X, boxPos.Y, boxW, boxH);
+            _regions.Add(new CalloutRegion { Key = bindKey, Rect = rect });
 
-            PointF lineStart = isBottomCenter
-                ? new PointF(rect.X + rect.Width / 2f, rect.Y)
-                : isLeft
-                    ? new PointF(rect.Right, rect.Y + boxH / 2f)
-                    : new PointF(rect.X, rect.Y + boxH / 2f);
+            bool hovered = string.Equals(_hoveredKey, bindKey, StringComparison.OrdinalIgnoreCase);
 
-            using (Pen linePen = new Pen(Color.FromArgb(100, 125, 211, 252), 1.2f))
+            PointF lineStart = isLeft
+                ? new PointF(rect.Right, rect.Y + boxH / 2f)
+                : new PointF(rect.X, rect.Y + boxH / 2f);
+
+            using (Pen linePen = new Pen(Color.FromArgb(hovered ? 200 : 100, 125, 211, 252), 1.2f))
             {
                 g.DrawLine(linePen, lineStart, anchor);
             }
@@ -237,9 +321,12 @@ namespace XboxBatteryMonitor.UI
                 g.FillEllipse(dot, anchor.X - 2.5f, anchor.Y - 2.5f, 5, 5);
             }
 
+            Color bgCol = hovered ? Color.FromArgb(54, 58, 68) : Color.FromArgb(40, 40, 44);
+            Color borderCol = hovered ? Color.FromArgb(125, 211, 252) : Color.FromArgb(65, 65, 72);
+
             using (GraphicsPath path = FluentTheme.CreateRoundedRect(rect, 6f))
-            using (SolidBrush bg = new SolidBrush(Color.FromArgb(40, 40, 44)))
-            using (Pen border = new Pen(Color.FromArgb(65, 65, 72), 1f))
+            using (SolidBrush bg = new SolidBrush(bgCol))
+            using (Pen border = new Pen(borderCol, hovered ? 1.4f : 1f))
             {
                 g.FillPath(bg, path);
                 g.DrawPath(border, path);
@@ -251,7 +338,7 @@ namespace XboxBatteryMonitor.UI
             using (SolidBrush bVal = new SolidBrush(Color.White))
             {
                 g.DrawString(btnName, fKey, bKey, rect.X + 8, rect.Y + 4);
-                g.DrawString(action, fVal, bVal, rect.X + 8, rect.Y + 17);
+                g.DrawString(action + " ▾", fVal, bVal, rect.X + 8, rect.Y + 18);
             }
         }
     }
